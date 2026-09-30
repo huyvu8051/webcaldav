@@ -1,0 +1,69 @@
+[package]
+name = "webcaldav"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+leptos = { version = "0.8", default-features = false }
+leptos_router = { version = "0.8", default-features = false }
+leptos_meta = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", default-features = false, features = ["std", "clock", "wasmbind"] }
+
+# ssr-only
+anyhow = { version = "1", optional = true }
+tokio = { version = "1", features = ["full"], optional = true }
+axum = { version = "0.8", optional = true }
+tower-http = { version = "0.6", features = ["fs"], optional = true }
+tracing = { version = "0.1", optional = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
+leptos_axum = { version = "0.8", optional = true }
+any_spawner = { version = "0.3", optional = true }
+
+# hydrate-only
+wasm-bindgen = { version = "0.2", optional = true }
+console_error_panic_hook = { version = "0.1", optional = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen-futures = { version = "0.4", optional = true }
+js-sys = { version = "0.3", optional = true }
+web-sys = { version = "0.3", features = ["Window", "Storage", "Document"], optional = true }
+rsdav = { git = "https://github.com/huyvu8051/rsdav", optional = true }
+
+[features]
+ssr = [
+    "dep:anyhow",
+    "dep:tokio",
+    "dep:axum",
+    "dep:tower-http",
+    "dep:tracing",
+    "dep:tracing-subscriber",
+    "dep:leptos_axum",
+    "dep:any_spawner",
+    "leptos/ssr",
+]
+hydrate = [
+    "dep:wasm-bindgen",
+    "dep:console_error_panic_hook",
+    "dep:wasm-bindgen-futures",
+    "dep:js-sys",
+    "dep:web-sys",
+    "dep:rsdav",
+    "leptos/hydrate",
+]
+
+[package.metadata.leptos]
+output-name = "webcaldav"
+site-root = "target/site"
+site-pkg-dir = "pkg"
+site-addr = "127.0.0.1:8090"
+reload-port = 3012
+bin-features = ["ssr"]
+bin-default-features = false
+lib-features = ["hydrate"]
+lib-default-features = false
+hash-files = true
