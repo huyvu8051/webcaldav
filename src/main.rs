@@ -1,3 +1,5 @@
+#![recursion_limit = "1024"]
+
 #[cfg(feature = "ssr")]
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -19,7 +21,7 @@ async fn main() -> anyhow::Result<()> {
     let port = env::var("PORT").unwrap_or_else(|_| "8090".to_string());
     for (key, default) in [
         ("LEPTOS_OUTPUT_NAME", "webcaldav"),
-        ("LEPTOS_SITE_ROOT", "target/site"),
+        ("LEPTOS_SITE_ROOT", "."),
         ("LEPTOS_SITE_PKG_DIR", "pkg"),
         ("LEPTOS_SITE_ADDR", &format!("127.0.0.1:{port}")),
         ("LEPTOS_RELOAD_PORT", "3012"),

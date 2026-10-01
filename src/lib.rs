@@ -1,3 +1,5 @@
+#![recursion_limit = "1024"]
+
 pub mod calendar_grid;
 pub mod connect;
 pub mod dav;

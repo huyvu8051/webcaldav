@@ -167,6 +167,51 @@ impl EventForm {
     }
 }
 
+#[cfg(feature = "hydrate")]
+fn random_fill(form: EventForm) {
+    use fake::faker::address::en::CityName;
+    use fake::faker::lorem::en::{Paragraph, Sentence};
+    use fake::Fake;
+
+    fn pick(options: &[&str]) -> String {
+        let idx = ((js_sys::Math::random() * options.len() as f64) as usize).min(options.len() - 1);
+        options[idx].to_string()
+    }
+
+    let summary: String = Sentence(3..7).fake();
+    form.summary.set(summary.trim_end_matches('.').to_string());
+
+    let description: String = Paragraph(1..3).fake();
+    form.description.set(description);
+
+    let location: String = CityName().fake();
+    form.location.set(location);
+
+    form.priority.set(pick(&["", "1", "5", "9"]));
+    form.busy.set(pick(&["", "busy", "free"]));
+    form.reminder_preset.set(pick(&["none", "5", "15", "30", "60", "1440"]));
+    form.reminder_value.set(String::new());
+    form.reminder_unit.set("minutes".to_string());
+    form.travel_preset.set(pick(&["none", "0", "15", "30", "45", "60"]));
+    form.travel_value.set(String::new());
+    form.travel_unit.set("minutes".to_string());
+
+    let date_part: String = form.start.get_untracked().chars().take(10).collect();
+    if date_part.len() == 10 {
+        if form.all_day.get_untracked() {
+            form.start.set(date_part.clone());
+            form.end.set(date_part);
+        } else {
+            let hour = 8 + (js_sys::Math::random() * 10.0) as u32;
+            form.start.set(format!("{date_part}T{hour:02}:00"));
+            form.end.set(format!("{date_part}T{:02}:00", hour + 1));
+        }
+    }
+}
+
+#[cfg(not(feature = "hydrate"))]
+fn random_fill(_form: EventForm) {}
+
 fn shift_month(date: NaiveDate, delta: i32) -> NaiveDate {
     let mut year = date.year();
     let mut month = date.month() as i32 + delta;
@@ -686,10 +731,21 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                                 </div>
 
                                 <div class="mt-2 pt-4 bg-[#050508] border-t border-[#2BE8C9]/20 -mx-5 -mb-5 p-4 rounded-b flex flex-col gap-3 font-mono">
-                                    <span class="text-xs text-[#2BE8C9] font-bold tracking-wide flex items-center gap-1.5 uppercase">
-                                        <span class="material-symbols-outlined text-[16px]">"bolt"</span>
-                                        {move || if editing_event.get().is_some() { "EDIT EVENT" } else { "+ QUICK SCHEDULE" }}
-                                    </span>
+                                    <div class="flex items-center justify-between">
+                                        <span class="text-xs text-[#2BE8C9] font-bold tracking-wide flex items-center gap-1.5 uppercase">
+                                            <span class="material-symbols-outlined text-[16px]">"bolt"</span>
+                                            {move || if editing_event.get().is_some() { "EDIT EVENT" } else { "+ QUICK SCHEDULE" }}
+                                        </span>
+                                        <button
+                                            type="button"
+                                            class="flex items-center gap-1 px-2 py-1 rounded border border-[#2BE8C9]/25 text-[#8B949E] hover:text-[#2BE8C9] hover:border-[#2BE8C9]/60 font-mono text-[10px] uppercase tracking-wider transition-colors cursor-pointer"
+                                            title="Fill with random test data"
+                                            on:click=move |_| random_fill(form)
+                                        >
+                                            <span class="material-symbols-outlined text-[13px]">"casino"</span>
+                                            "RANDOM"
+                                        </button>
+                                    </div>
                                     <form on:submit=submit_event class="flex flex-col gap-2">
                                         <select
                                             class="bg-[#131722] border border-[#2BE8C9]/30 text-[#e6edf3] text-xs px-3 py-1.5 rounded focus:outline-none focus:border-[#2BE8C9] transition-all"
