@@ -19,7 +19,7 @@ FROM chef AS wasm-builder
 RUN rustup target add wasm32-unknown-unknown
 RUN cargo install wasm-bindgen-cli --version 0.2.129 --locked
 COPY --from=planner /app/recipe.json recipe.json
-RUN cargo chef cook --release --lib --recipe-path recipe.json --target wasm32-unknown-unknown --no-default-features --features hydrate
+RUN cargo chef cook --release --recipe-path recipe.json --target wasm32-unknown-unknown --no-default-features --features hydrate
 COPY . .
 RUN cargo build --release --lib --target wasm32-unknown-unknown --no-default-features --features hydrate
 RUN wasm-bindgen target/wasm32-unknown-unknown/release/webcaldav.wasm --out-dir pkg --target web --no-typescript
