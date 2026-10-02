@@ -3,7 +3,7 @@ use leptos::prelude::*;
 use leptos_router::hooks::use_navigate;
 
 #[component]
-pub fn TopBar(username: String) -> impl IntoView {
+pub fn TopBar(#[prop(into)] username: Signal<String>) -> impl IntoView {
     let navigate = use_navigate();
     let disconnect = move |_| {
         storage::clear();
@@ -33,7 +33,7 @@ pub fn TopBar(username: String) -> impl IntoView {
                         <span class="w-2 h-2 rounded-full bg-[#2BE8C9] animate-pulse"></span>
                         <span class="text-[#2BE8C9] font-semibold">"NODE: ONLINE"</span>
                         <span class="text-white/20">"|"</span>
-                        <span>{username}</span>
+                        <span>{move || username.get()}</span>
                     </div>
                     <button
                         class="px-2 py-1 rounded border border-[#2BE8C9]/30 hover:border-[#2BE8C9] text-[#8B949E] hover:text-[#2BE8C9] font-mono text-[11px] transition-colors"
@@ -62,35 +62,4 @@ pub fn Footer() -> impl IntoView {
             </div>
         </footer>
     }
-}
-
-pub fn percent_encode(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    for byte in input.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(byte as char)
-            }
-            _ => out.push_str(&format!("%{byte:02X}")),
-        }
-    }
-    out
-}
-
-pub fn percent_decode(input: &str) -> String {
-    let bytes = input.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let Ok(byte) = u8::from_str_radix(&input[i + 1..i + 3], 16) {
-                out.push(byte);
-                i += 3;
-                continue;
-            }
-        }
-        out.push(bytes[i]);
-        i += 1;
-    }
-    String::from_utf8_lossy(&out).into_owned()
 }

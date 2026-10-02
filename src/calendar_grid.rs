@@ -430,7 +430,7 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
             <div class="absolute bottom-0 right-1/4 w-[420px] h-[300px] bg-[#FF5500]/[0.04] blur-[110px] rounded-full"></div>
         </div>
 
-        <TopBar username=username.get_untracked()/>
+        <TopBar username=username/>
 
         <main class="w-full flex-1 relative z-10">
             <div class="flex flex-col w-full px-4 sm:px-6 py-6 max-w-[1280px] mx-auto">
