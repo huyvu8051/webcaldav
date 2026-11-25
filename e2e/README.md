@@ -12,6 +12,16 @@ npx playwright test -g "delete"   # one slice
 The dev server starts itself (`webServer` in `playwright.config.ts`) and an
 already-running `cargo leptos serve` is reused.
 
+To run against a deployed instance, set `BASE_URL` — **and add
+`--workers=1`**. The default ten workers each pull a ~1 MB wasm bundle
+through a ~186 KB/s Cloudflare tunnel, which times out most of the suite and
+measures the tunnel rather than the app: 37 failures in parallel against 1 in
+serial, on the same commit, same deployment.
+
+```bash
+BASE_URL=https://webcaldav.opendiy.vn npx playwright test --project=phone --workers=1
+```
+
 **For anything about speed, run the server with `--release` first.** A debug
 build serves 7.8 MB of unoptimised wasm against release's 2.0 MB, and hydrates
 in 1128 ms against 103 ms. It makes no measurable difference to tap latency on
