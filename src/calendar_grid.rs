@@ -560,7 +560,10 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                     // Errors read as errors through wording and placement. The
                     // old orange panel was a second accent, which DESIGN.md
                     // rules out outright.
-                    <div class="flex items-start gap-2.5 p-4 rounded-lg bg-canvas border border-hairline">
+                    <div
+                        data-testid="status-error"
+                        class="flex items-start gap-2.5 p-4 rounded-lg bg-canvas border border-hairline"
+                    >
                         <span class="material-symbols-outlined text-[20px] text-ink-48 shrink-0">
                             "error_outline"
                         </span>
@@ -579,6 +582,7 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                         // month at a time; the picker is for jumping.
                         <button
                             type="button"
+                            data-testid="month-title"
                             class="flex items-center gap-1 min-w-0 h-11 text-tagline font-semibold text-ink"
                             aria-expanded=move || month_picker_open.get().to_string()
                             on:click=move |_| month_picker_open.update(|v| *v = !*v)
@@ -592,6 +596,7 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                         </button>
                         <div class="flex items-center shrink-0">
                             <button
+                                data-testid="today-button"
                                 type="button"
                                 class="h-11 px-3 text-caption font-semibold text-action"
                                 on:click=move |_| current_month.set(NaiveDate::from_ymd_opt(today.year(), today.month(), 1).unwrap())
@@ -603,6 +608,7 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                             <button
                                 type="button"
                                 class="w-11 h-11 flex items-center justify-center rounded-full text-action"
+                                data-testid="month-prev"
                                 aria-label="Previous month"
                                 on:click=move |_| current_month.update(|d| *d = shift_month(*d, -1))
                             >
@@ -611,6 +617,7 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                             <button
                                 type="button"
                                 class="w-11 h-11 flex items-center justify-center rounded-full text-action"
+                                data-testid="month-next"
                                 aria-label="Next month"
                                 on:click=move |_| current_month.update(|d| *d = shift_month(*d, 1))
                             >
@@ -626,6 +633,7 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                         <div class="flex items-center gap-2">
                             <select
                                 class=SELECT
+                                data-testid="month-select"
                                 aria-label="Month"
                                 prop:value=move || current_month.get().month().to_string()
                                 on:change=move |ev| {
@@ -651,6 +659,7 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                             </select>
                             <select
                                 class=SELECT
+                                data-testid="year-select"
                                 aria-label="Year"
                                 prop:value=move || current_month.get().year().to_string()
                                 on:change=move |ev| {
@@ -678,6 +687,7 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                     // press-scale is global in lib.rs so it cannot be left off.
                     <button
                         type="button"
+                        data-testid="add-event"
                         class="w-full h-12 rounded-full bg-action text-canvas text-body flex items-center justify-center gap-2"
                         on:click=open_new_event
                     >
@@ -716,6 +726,16 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                                             // itself.
                                             <button
                                                 type="button"
+                                                data-testid="day-cell"
+                                                // Addressable by date, so a
+                                                // grid assertion names the day
+                                                // it means instead of counting
+                                                // squares from a corner.
+                                                data-date=day.format("%Y-%m-%d").to_string()
+                                                data-in-month=in_month.to_string()
+                                                data-today=is_today.to_string()
+                                                data-selected=move || is_selected().to_string()
+                                                data-event-count=day_events.len().to_string()
                                                 class="aspect-square rounded-sm flex flex-col items-center justify-center gap-1"
                                                 class=("opacity-40", move || !in_month)
                                                 on:click=move |_| select_day(day)
@@ -742,7 +762,7 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                                                 // there are dots, so the date
                                                 // row does not shift between
                                                 // busy and empty days.
-                                                <span class="flex items-center gap-0.5 h-1.5">
+                                                <span data-testid="day-dots" class="flex items-center gap-0.5 h-1.5">
                                                     {day_events
                                                         .iter()
                                                         .take(3)
@@ -769,7 +789,7 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                     // The latency readout that used to sit beside it answered
                     // nothing a calendar user can act on.
                     <Show when=move || last_synced.get().is_some() || loading.get()>
-                      <div class="flex items-center justify-center gap-1">
+                      <div data-testid="sync-line" class="flex items-center justify-center gap-1">
                         // Same indicator as the buttons use, so "working" looks
                         // the same wherever it happens.
                         <Show when=move || loading.get()>
@@ -793,6 +813,7 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                         // explicit tap is not an incidental tab switch.
                         <button
                             type="button"
+                            data-testid="refresh"
                             class="h-11 px-2 flex items-center text-fine font-semibold text-action disabled:text-ink-48"
                             disabled=move || loading.get()
                             on:click=move |_| refresh_events()
@@ -803,7 +824,10 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                     </Show>
                 </div>
 
-                <div class="bg-canvas border border-hairline rounded-lg p-4 flex flex-col gap-2">
+                <div
+                    data-testid="calendars-panel"
+                    class="bg-canvas border border-hairline rounded-lg p-4 flex flex-col gap-2"
+                >
                     <span class="text-caption font-semibold text-ink">"Calendars"</span>
                     <For
                         each=move || calendars.get()
@@ -814,15 +838,21 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                             let url_for_color_get = cal.url.clone();
                             let url_for_color_set = cal.url.clone();
                             view! {
-                                <label class="flex items-center gap-3 min-h-11 cursor-pointer">
+                                <label
+                                    data-testid="calendar-row"
+                                    data-url=cal.url.clone()
+                                    class="flex items-center gap-3 min-h-11 cursor-pointer"
+                                >
                                     <input
                                         type="checkbox"
+                                        data-testid="calendar-visible"
                                         class="w-5 h-5 accent-action shrink-0"
                                         prop:checked=move || !hidden_calendars.get().contains(&url_for_visible)
                                         on:change=move |_| toggle_calendar_visible(url_for_toggle.clone())
                                     />
                                     <input
                                         type="color"
+                                        data-testid="calendar-color"
                                         class="w-7 h-7 rounded-full border-none bg-transparent cursor-pointer shrink-0"
                                         prop:value=move || calendar_color(&url_for_color_get)
                                         on:input=move |ev| set_calendar_color(url_for_color_set.clone(), event_target_value(&ev))
@@ -840,16 +870,19 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                     <Show
                         when=move || selected_day.get().is_some()
                         fallback=|| view! {
-                            <p class="text-body text-ink-80 p-6">
+                            <p data-testid="day-detail-empty" class="text-body text-ink-80 p-6">
                                 "Pick a day to see what is on it."
                             </p>
                         }
                     >
-                        <div class="px-4 py-3 border-b border-divider-soft flex flex-col gap-0.5">
-                            <span class="text-body font-semibold text-ink">
+                        <div
+                            data-testid="day-detail"
+                            class="px-4 py-3 border-b border-divider-soft flex flex-col gap-0.5"
+                        >
+                            <span data-testid="day-detail-date" class="text-body font-semibold text-ink">
                                 {move || selected_day.get().map(|d| d.format("%A %-d %B").to_string()).unwrap_or_default()}
                             </span>
-                            <span class="text-caption text-ink-48">
+                            <span data-testid="day-detail-count" class="text-caption text-ink-48">
                                 {move || slot_label(selected_day.get().map(events_on).unwrap_or_default().len())}
                             </span>
                         </div>
@@ -863,9 +896,13 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                                     let event_for_delete = event.clone();
                                     let dot = calendar_color(&event.calendar_url);
                                     view! {
-                                        <div class="rounded-lg border border-hairline p-3 flex items-start justify-between gap-2">
+                                        <div
+                                            data-testid="event-card"
+                                            data-uid=event.uid.clone()
+                                            class="rounded-lg border border-hairline p-3 flex items-start justify-between gap-2"
+                                        >
                                             <div class="flex flex-col gap-1 min-w-0 flex-1">
-                                                <span class="text-caption text-ink-48">
+                                                <span data-testid="event-time" class="text-caption text-ink-48">
                                                     {event.start.clone()}" – "{event.end.clone()}
                                                 </span>
                                                 <span class="flex items-center gap-2 min-w-0">
@@ -873,7 +910,7 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                                                         class="w-2 h-2 rounded-full shrink-0"
                                                         style:background-color=dot
                                                     ></span>
-                                                    <span class="text-body font-semibold text-ink truncate">
+                                                    <span data-testid="event-summary" class="text-body font-semibold text-ink truncate">
                                                         {event.summary.clone()}
                                                     </span>
                                                 </span>
@@ -881,7 +918,7 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                                                     let d = event.description.clone();
                                                     move || !d.is_empty()
                                                 }>
-                                                    <span class="text-caption text-ink-80">
+                                                    <span data-testid="event-description" class="text-caption text-ink-80">
                                                         {event.description.clone()}
                                                     </span>
                                                 </Show>
@@ -890,6 +927,7 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                                                 <button
                                                     type="button"
                                                     class="w-11 h-11 flex items-center justify-center rounded-full text-action"
+                                                    data-testid="event-edit"
                                                     aria-label="Edit event"
                                                     on:click=move |_| start_edit(event_for_edit.clone())
                                                 >
@@ -912,6 +950,7 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                                                     })
                                                     icon="delete"
                                                     label="Delete event"
+                                                    testid="event-delete"
                                                     class="w-11 h-11 flex items-center justify-center rounded-full text-ink-48"
                                                     on_click=Callback::new({
                                                         let mine = event_for_delete.clone();
@@ -933,6 +972,7 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                                 </span>
                                 <button
                                     type="button"
+                                    data-testid="form-random"
                                     class="h-11 px-2 flex items-center gap-1.5 text-caption text-ink-48"
                                     title="Fill with random test data"
                                     on:click=move |_| random_fill(form)
@@ -942,8 +982,13 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                                 </button>
                             </div>
 
-                            <form on:submit=submit_event class="flex flex-col gap-3">
+                            <form
+                                data-testid="event-form"
+                                on:submit=submit_event
+                                class="flex flex-col gap-3"
+                            >
                                 <select
+                                    data-testid="form-calendar-url"
                                     class=SELECT
                                     prop:value=move || form.calendar_url.get()
                                     on:change=move |ev| form.calendar_url.set(event_target_value(&ev))
@@ -953,6 +998,7 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                                     }).collect_view()}
                                 </select>
                                 <input
+                                    data-testid="form-summary"
                                     class=FIELD
                                     type="text"
                                     placeholder="Title"
@@ -961,6 +1007,7 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                                     required
                                 />
                                 <textarea
+                                    data-testid="form-description"
                                     class=FIELD_AREA
                                     rows="2"
                                     placeholder="Notes"
@@ -969,6 +1016,7 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                                 ></textarea>
                                 <label class="flex items-center gap-3 min-h-11 cursor-pointer">
                                     <input
+                                        data-testid="form-all-day"
                                         type="checkbox"
                                         class="w-5 h-5 accent-action shrink-0"
                                         prop:checked=move || form.all_day.get()
@@ -983,6 +1031,7 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                                 <label class="flex flex-col gap-1.5">
                                     <span class="text-caption text-ink-48 px-1">"Starts"</span>
                                     <input
+                                        data-testid="form-start"
                                         class=FIELD
                                         type=move || if form.all_day.get() { "date" } else { "datetime-local" }
                                         prop:value=move || form.start.get()
@@ -993,6 +1042,7 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                                 <label class="flex flex-col gap-1.5">
                                     <span class="text-caption text-ink-48 px-1">"Ends"</span>
                                     <input
+                                        data-testid="form-end"
                                         class=FIELD
                                         type=move || if form.all_day.get() { "date" } else { "datetime-local" }
                                         prop:value=move || form.end.get()
@@ -1001,6 +1051,7 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                                     />
                                 </label>
                                 <input
+                                    data-testid="form-location"
                                     class=FIELD
                                     type="text"
                                     placeholder="Location"
@@ -1009,6 +1060,7 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                                 />
                                 <div class="grid grid-cols-2 gap-2">
                                     <select
+                                        data-testid="form-priority"
                                         class=SELECT
                                         prop:value=move || form.priority.get()
                                         on:change=move |ev| form.priority.set(event_target_value(&ev))
@@ -1019,6 +1071,7 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                                         <option value="9">"Low"</option>
                                     </select>
                                     <select
+                                        data-testid="form-busy"
                                         class=SELECT
                                         prop:value=move || form.busy.get()
                                         on:change=move |ev| form.busy.set(event_target_value(&ev))
@@ -1030,6 +1083,7 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                                 </div>
                                 <div class="flex flex-col gap-2">
                                     <select
+                                        data-testid="form-reminder-preset"
                                         class=SELECT
                                         prop:value=move || form.reminder_preset.get()
                                         on:change=move |ev| form.reminder_preset.set(event_target_value(&ev))
@@ -1047,6 +1101,7 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                                     <Show when=move || form.reminder_preset.get() == "custom">
                                         <div class="grid grid-cols-2 gap-2">
                                             <input
+                                                data-testid="form-reminder-value"
                                                 class=FIELD
                                                 type="number"
                                                 min="0"
@@ -1055,6 +1110,7 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                                                 on:input=move |ev| form.reminder_value.set(event_target_value(&ev))
                                             />
                                             <select
+                                                data-testid="form-reminder-unit"
                                                 class=SELECT
                                                 prop:value=move || form.reminder_unit.get()
                                                 on:change=move |ev| form.reminder_unit.set(event_target_value(&ev))
@@ -1068,6 +1124,7 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                                 </div>
                                 <div class="flex flex-col gap-2">
                                     <select
+                                        data-testid="form-travel-preset"
                                         class=SELECT
                                         prop:value=move || form.travel_preset.get()
                                         on:change=move |ev| form.travel_preset.set(event_target_value(&ev))
@@ -1084,6 +1141,7 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                                     <Show when=move || form.travel_preset.get() == "custom">
                                         <div class="grid grid-cols-2 gap-2">
                                             <input
+                                                data-testid="form-travel-value"
                                                 class=FIELD
                                                 type="number"
                                                 min="0"
@@ -1092,6 +1150,7 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                                                 on:input=move |ev| form.travel_value.set(event_target_value(&ev))
                                             />
                                             <select
+                                                data-testid="form-travel-unit"
                                                 class=SELECT
                                                 prop:value=move || form.travel_unit.get()
                                                 on:change=move |ev| form.travel_unit.set(event_target_value(&ev))
@@ -1105,6 +1164,7 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                                 </div>
                                 <div class="flex items-center gap-2 pt-1">
                                     <PendingButton
+                                        testid="form-submit"
                                         submit=true
                                         pending=saving
                                         label=Signal::derive(move || {
@@ -1119,6 +1179,7 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                                         // half of the spec's two-CTA pairing.
                                         <button
                                             type="button"
+                                            data-testid="form-cancel"
                                             class="h-12 px-5 rounded-full border border-action text-action text-body"
                                             on:click=cancel_edit
                                         >

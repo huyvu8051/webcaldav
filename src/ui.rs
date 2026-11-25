@@ -18,7 +18,7 @@ use leptos::prelude::*;
 /// own foreground instead of introducing a second accent.
 #[component]
 pub fn Spinner(#[prop(optional, into)] class: String) -> impl IntoView {
-    view! { <span class=format!("spinner {class}") aria-hidden="true"></span> }
+    view! { <span data-testid="spinner" class=format!("spinner {class}") aria-hidden="true"></span> }
 }
 
 /// A button that cannot be pressed twice and says so.
@@ -41,9 +41,13 @@ pub fn PendingButton(
     /// Disabling beyond the pending state -- an unsatisfied form, say.
     #[prop(optional, into)] disabled: Signal<bool>,
     #[prop(optional)] on_click: Option<Callback<()>>,
+    /// Stable hook for the e2e suite. Text and glyphs move around; this does
+    /// not, which is the whole reason the tests address it instead.
+    #[prop(optional, into)] testid: String,
 ) -> impl IntoView {
     view! {
         <button
+            data-testid=testid
             type=move || if submit { "submit" } else { "button" }
             class=class
             // Pressing twice would send a second PUT for the same event.
@@ -78,9 +82,11 @@ pub fn PendingIconButton(
     #[prop(into)] label: String,
     #[prop(into)] class: String,
     #[prop(optional)] on_click: Option<Callback<()>>,
+    #[prop(optional, into)] testid: String,
 ) -> impl IntoView {
     view! {
         <button
+            data-testid=testid
             type="button"
             class=class
             aria-label=label

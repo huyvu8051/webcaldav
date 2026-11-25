@@ -1,0 +1,24 @@
+{
+  "name": "webcaldav-e2e",
+  "version": "1.0.0",
+  "scripts": {
+    "e2e": "playwright test",
+    "e2e:phone": "playwright test --project=phone",
+    "e2e:ui": "playwright test --ui",
+    "e2e:report": "playwright show-report"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/huyvu8051/webcaldav.git"
+  },
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/huyvu8051/webcaldav/issues"
+  },
+  "homepage": "https://github.com/huyvu8051/webcaldav#readme",
+  "devDependencies": {
+    "@playwright/test": "^1.65.1"
+  },
+  "private": true
+}

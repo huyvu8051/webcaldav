@@ -15,19 +15,26 @@ pub fn TopBar(#[prop(into)] username: Signal<String>) -> impl IntoView {
         navigate("/", Default::default());
     };
     view! {
-        <header class="sticky top-0 z-50 w-full bg-parchment/80 backdrop-blur-xl border-b border-hairline">
+        <header
+            data-testid="topbar"
+            class="sticky top-0 z-50 w-full bg-parchment/80 backdrop-blur-xl border-b border-hairline"
+        >
             <div class="max-w-app mx-auto h-[52px] px-4 flex items-center justify-between gap-3">
                 <div class="min-w-0">
                     <h1 class="text-tagline font-semibold text-ink truncate">"Calendar"</h1>
                 </div>
                 <div class="flex items-center gap-3 shrink-0">
-                    <span class="text-caption text-ink-48 truncate max-w-[120px]">
+                    <span data-testid="topbar-username" class="text-caption text-ink-48 truncate max-w-[120px]">
                         {move || username.get()}
                     </span>
                     // The only interactive element here, so the only one
                     // wearing Action Blue.
                     <button
-                        class="text-caption font-semibold text-action rounded-sm px-1 py-0.5"
+                        data-testid="disconnect"
+                        // h-11, not just padding: DESIGN.md's 44px floor applies
+                        // to a text button as much as a filled one, and this
+                        // one sits right at the edge of the screen.
+                        class="h-11 px-2 -mr-2 flex items-center text-caption font-semibold text-action rounded-sm"
                         on:click=disconnect
                     >
                         "Disconnect"
@@ -72,12 +79,12 @@ pub fn Footer() -> impl IntoView {
     });
 
     view! {
-        <footer class="w-full border-t border-hairline mt-auto">
+        <footer data-testid="footer" class="w-full border-t border-hairline mt-auto">
             <div class="max-w-app mx-auto px-4 py-6 flex flex-col gap-1">
                 <p class="text-fine text-ink-48">"CalDAV · RFC 4791"</p>
                 // Only once known, so the line does not appear then fill in.
                 <Show when=move || !timezone.get().is_empty()>
-                    <p class="text-fine text-ink-48">
+                    <p data-testid="footer-timezone" class="text-fine text-ink-48">
                         {move || timezone.get()}
                     </p>
                 </Show>

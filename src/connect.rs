@@ -80,7 +80,10 @@ pub fn ConnectRoutePage() -> impl IntoView {
                 <Show when=move || !status.get().is_empty()>
                     // One accent only, so an error reads through wording and
                     // placement rather than colour.
-                    <div class="flex items-start gap-2.5 p-4 rounded-lg bg-canvas border border-hairline">
+                    <div
+                        data-testid="connect-error"
+                        class="flex items-start gap-2.5 p-4 rounded-lg bg-canvas border border-hairline"
+                    >
                         <span class="material-symbols-outlined text-[20px] text-ink-48 shrink-0">
                             "error_outline"
                         </span>
@@ -102,6 +105,8 @@ pub fn ConnectRoutePage() -> impl IntoView {
                                         // `configurator-option-chip`.
                                         <button
                                             type="button"
+                                            data-testid="preset"
+                                            data-preset=*name
                                             class="px-4 py-2 rounded-full border border-hairline \
                                                    text-caption text-ink bg-canvas \
                                                    hover:border-action hover:text-action"
@@ -116,6 +121,7 @@ pub fn ConnectRoutePage() -> impl IntoView {
                     </div>
 
                     <form
+                        data-testid="connect-form"
                         class="flex flex-col gap-5"
                         on:submit=move |ev: leptos::ev::SubmitEvent| {
                             ev.prevent_default();
@@ -132,6 +138,7 @@ pub fn ConnectRoutePage() -> impl IntoView {
                                 </span>
                                 <input
                                     id="server-url"
+                                    data-testid="server-url"
                                     class=INPUT_CLASSES
                                     type="url"
                                     inputmode="url"
@@ -154,6 +161,7 @@ pub fn ConnectRoutePage() -> impl IntoView {
                                 </span>
                                 <input
                                     id="uid"
+                                    data-testid="username"
                                     class=INPUT_CLASSES
                                     type="text"
                                     inputmode="email"
@@ -176,6 +184,7 @@ pub fn ConnectRoutePage() -> impl IntoView {
                                 </span>
                                 <input
                                     id="secret-key"
+                                    data-testid="password"
                                     class=INPUT_CLASSES
                                     type=move || if password_visible.get() { "text" } else { "password" }
                                     autocomplete="current-password"
@@ -189,6 +198,7 @@ pub fn ConnectRoutePage() -> impl IntoView {
                                     // 44px: the platform's minimum touch target.
                                     class="absolute right-1 w-11 h-11 flex items-center justify-center \
                                            text-ink-48 rounded-full"
+                                    data-testid="password-toggle"
                                     aria-label="Show or hide password"
                                     on:click=move |_| password_visible.update(|v| *v = !*v)
                                 >
@@ -201,6 +211,7 @@ pub fn ConnectRoutePage() -> impl IntoView {
 
                         // `button-primary`. Press-scale is global in lib.rs.
                         <PendingButton
+                            testid="connect-submit"
                             submit=true
                             pending=connecting
                             label="Connect"
