@@ -529,7 +529,10 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
         form_open.set(true);
     };
 
-    let cancel_edit = move |_| {
+    // Closes the form, whichever kind it is. It used to be reachable only
+    // while editing, which left a new-event form with no way out at all: the
+    // only exit was to save something.
+    let close_form = move || {
         editing_event.set(None);
         form.clear();
         form_open.set(false);
@@ -710,15 +713,20 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
 
                     // `button-primary`: Action Blue, full pill, body text. The
                     // press-scale is global in lib.rs so it cannot be left off.
-                    <button
-                        type="button"
-                        data-testid="add-event"
-                        class="w-full h-12 rounded-full bg-action text-canvas text-body flex items-center justify-center gap-2"
-                        on:click=open_new_event
-                    >
-                        <span class="material-symbols-outlined text-[20px]">"add"</span>
-                        "Add event"
-                    </button>
+                    // Hidden while the form is open: the form is the add
+                    // affordance at that point, and tapping this again only
+                    // cleared what had been typed without closing anything.
+                    <Show when=move || !form_open.get()>
+                        <button
+                            type="button"
+                            data-testid="add-event"
+                            class="w-full h-12 rounded-full bg-action text-canvas text-body flex items-center justify-center gap-2"
+                            on:click=open_new_event
+                        >
+                            <span class="material-symbols-outlined text-[20px]">"add"</span>
+                            "Add event"
+                        </button>
+                    </Show>
                 </div>
 
                 <div class="flex flex-col gap-2">
@@ -1049,6 +1057,11 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
 
                             <form
                                 data-testid="event-form"
+                                on:keydown=move |ev: leptos::ev::KeyboardEvent| {
+                                    if ev.key() == "Escape" {
+                                        close_form();
+                                    }
+                                }
                                 on:submit=submit_event
                                 class="flex flex-col gap-3"
                             >
@@ -1246,18 +1259,18 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                                         class="flex-1 h-12 rounded-full bg-action text-canvas text-body \
                                                disabled:opacity-40 flex items-center justify-center gap-2"
                                     />
-                                    <Show when=move || editing_event.get().is_some()>
-                                        // `button-secondary-pill`: the ghost
-                                        // half of the spec's two-CTA pairing.
-                                        <button
-                                            type="button"
-                                            data-testid="form-cancel"
-                                            class="h-12 px-5 rounded-full border border-action text-action text-body"
-                                            on:click=cancel_edit
-                                        >
-                                            "Cancel"
-                                        </button>
-                                    </Show>
+                                    // `button-secondary-pill`: the ghost half
+                                    // of the spec's two-CTA pairing. Always
+                                    // present -- a sheet you cannot dismiss is
+                                    // a trap whether or not it is an edit.
+                                    <button
+                                        type="button"
+                                        data-testid="form-cancel"
+                                        class="h-12 px-5 rounded-full border border-action text-action text-body"
+                                        on:click=move |_| close_form()
+                                    >
+                                        "Cancel"
+                                    </button>
                                 </div>
                             </form>
                         </div>

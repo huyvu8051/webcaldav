@@ -9,7 +9,9 @@ test.describe('creating, editing and deleting events', () => {
     await expect(page.getByTestId('add-event')).toBeVisible()
     await page.getByTestId('add-event').click()
     await expect(page.getByTestId('event-form')).toBeVisible()
-    await expect(page.getByTestId('add-event')).toHaveCount(1)
+    // And the button steps aside rather than sitting on top of the form it
+    // just opened -- which is where this started.
+    await expect(page.getByTestId('add-event')).toHaveCount(0)
   })
 
   test('a new event is PUT to the server and shows up on the day', async ({ mock, page, connected }) => {
@@ -191,7 +193,51 @@ test.describe('creating, editing and deleting events', () => {
 
     await page.getByTestId('add-event').click()
     await expect(page.getByTestId('form-summary')).toHaveValue('')
-    await expect(page.getByTestId('form-cancel')).toHaveCount(0)
+  })
+
+  test('a new-event form can be dismissed without saving', async ({ mock, page, connected }) => {
+    void connected
+    // Cancel used to exist only while editing, so opening Add event left a
+    // sheet with no way out: the only exit was to save something.
+    await page.getByTestId('add-event').click()
+    await page.getByTestId('form-summary').fill('Changed my mind')
+    await expect(page.getByTestId('form-cancel')).toBeVisible()
+
+    mock.clearRequests()
+    await page.getByTestId('form-cancel').click()
+    await expect(page.getByTestId('event-form')).toHaveCount(0)
+    await expect(page.getByTestId('add-event')).toBeVisible()
+    expect(mock.countOf('PUT'), 'dismissing must not write anything').toBe(0)
+  })
+
+  test('Escape closes the form too', async ({ page, connected }) => {
+    void connected
+    await page.getByTestId('add-event').click()
+    await page.getByTestId('form-summary').fill('Never mind')
+    await page.getByTestId('form-summary').press('Escape')
+    await expect(page.getByTestId('event-form')).toHaveCount(0)
+  })
+
+  test('the Add event button steps aside while the form is open', async ({ page, connected }) => {
+    void connected
+    // It was still there, and tapping it wiped whatever had been typed
+    // without closing anything -- two buttons for one job, one of them
+    // destructive.
+    await expect(page.getByTestId('add-event')).toBeVisible()
+    await page.getByTestId('add-event').click()
+    await expect(page.getByTestId('add-event')).toHaveCount(0)
+
+    await page.getByTestId('form-cancel').click()
+    await expect(page.getByTestId('add-event')).toBeVisible()
+  })
+
+  test('the form reopens empty after being dismissed', async ({ page, connected }) => {
+    void connected
+    await page.getByTestId('add-event').click()
+    await page.getByTestId('form-summary').fill('Discarded')
+    await page.getByTestId('form-cancel').click()
+    await page.getByTestId('add-event').click()
+    await expect(page.getByTestId('form-summary')).toHaveValue('')
   })
 
   test('deleting removes the event from the server and the list', async ({ mock, page, connected }) => {
