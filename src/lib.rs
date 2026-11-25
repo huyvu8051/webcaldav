@@ -104,6 +104,12 @@ body { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; 
    born without it. */
 button:active, a[role="button"]:active { transform: scale(0.95); }
 button, a[role="button"] { transition: transform 120ms ease, background-color 120ms ease, color 120ms ease; }
+/* Without this, Safari keeps double-tap-to-zoom live on every control and
+   waits to see whether a second tap is coming before dispatching the click.
+   The page is already width=device-width, which removes the delay in most
+   cases, but `manipulation` is the only way to say so outright -- and a tap
+   that lands ~300ms late is indistinguishable from a slow app. */
+button, a, [role="button"], input, select, textarea, label { touch-action: manipulation; }
 
 /* The native select arrow sits hard against the right edge, so on a pill it
    reads as falling outside the curve, and each control's width puts it

@@ -30,6 +30,7 @@ lines and removes most of the app's latency. 4, 6, 7, 8 are smaller.
 | **S1** | **A page that cannot hydrate looks signed in and cannot be left** | `lib.rs` + `deployment.yaml` | **medium, do first** |
 | S2 | A corrupt stored config is left in localStorage | `storage.rs` | one line |
 | S3 | 9.4 MB wasm — ~2s of blank before hydration even on a good connection | `Cargo.toml` + `Dockerfile` | medium |
+| S4 | The local dev server serves a debug wasm, so it misrepresents speed | *(use `--release`)* | note |
 
 ---
 
@@ -133,6 +134,21 @@ cure.
 
 Worth doing before S1's affinity fix, since a smaller bundle shortens the
 window S1 is about.
+
+## S4 — the local dev server serves a debug wasm
+
+Not a bug, but it distorts every performance impression taken from
+`192.168.1.17:8090`. `cargo leptos serve` builds in debug; the wasm it serves
+is 7.8 MB of unoptimised code, and a phone running it is nowhere near what a
+release build does. Anything that feels slow there should be re-checked
+against a release build before being treated as a real problem:
+
+```bash
+cargo leptos serve --release
+```
+
+Related to S3 — the deployed build is 9.4 MB, which is *release* but
+unoptimised, so the gap between the two is smaller than it should be.
 
 ## S2 — a corrupt stored config is left behind
 

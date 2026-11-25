@@ -470,12 +470,14 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
         calendars.get_untracked().iter().map(|c| c.url.clone()).find(|url| !hidden_calendars.get_untracked().contains(url)).unwrap_or_default()
     };
 
+    // Only the selection. The four lines that used to follow -- clearing the
+    // form, resetting the calendar, re-dating it -- are all repeated verbatim
+    // by `open_new_event`, so doing them here bought nothing and cost two
+    // things: about twenty signal writes on every tap of a date, and a form
+    // that wiped whatever had been typed into it the moment the user picked a
+    // different day while it was open.
     let select_day = move |day: NaiveDate| {
         selected_day.set(Some(day));
-        editing_event.set(None);
-        form.clear();
-        form.calendar_url.set(first_visible_calendar());
-        form.set_default_day(day);
     };
 
     let save = Action::new_local(move |_: &()| {

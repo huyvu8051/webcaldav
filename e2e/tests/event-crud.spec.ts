@@ -149,6 +149,40 @@ test.describe('creating, editing and deleting events', () => {
     expect(mock.calendar('work').events.find((e) => e.uid === 'ev-standup')?.summary).toBe('Standup')
   })
 
+  test('picking a different day does not wipe the open form', async ({ connected: page }) => {
+    // select_day used to call form.clear(), set the calendar and re-date the
+    // form -- all of which open_new_event already does. The visible cost was
+    // that tapping a date while the form was open silently emptied it.
+    await page.getByTestId('add-event').click()
+    await page.getByTestId('form-summary').fill('Half-typed title')
+    await page.getByTestId('form-location').fill('Somewhere')
+
+    await dayCell(page, isoDay(3)).click()
+    await expect(dayCell(page, isoDay(3))).toHaveAttribute('data-selected', 'true')
+    await expect(page.getByTestId('event-form')).toBeVisible()
+    await expect(page.getByTestId('form-summary')).toHaveValue('Half-typed title')
+    await expect(page.getByTestId('form-location')).toHaveValue('Somewhere')
+  })
+
+  test('tapping a day makes no network request', async ({ mock, page, connected }) => {
+    void connected
+    // Every event is already in memory -- there is no time-range filter on
+    // the fetch -- so selection is pure local filtering. If this ever starts
+    // issuing a REPORT, the grid has become a per-day fetch by accident.
+    mock.clearRequests()
+    for (const d of [0, 1, 3, 5, 8]) await dayCell(page, isoDay(d)).click()
+    await page.waitForTimeout(800)
+    expect(mock.requests).toEqual([])
+  })
+
+  test('Add event after picking a day still dates itself to that day', async ({ connected: page }) => {
+    // The slimming above is only safe because open_new_event redoes the work.
+    await dayCell(page, isoDay(6)).click()
+    await page.getByTestId('add-event').click()
+    await expect(page.getByTestId('form-start')).toHaveValue(new RegExp('^' + isoDay(6)))
+    await expect(page.getByTestId('form-summary')).toHaveValue('')
+  })
+
   test('Cancel closes the form and clears it', async ({ connected: page }) => {
     await dayCell(page, isoDay(0)).click()
     await page.locator('[data-testid="event-card"]').filter({ hasText: 'Standup' }).getByTestId('event-edit').click()
