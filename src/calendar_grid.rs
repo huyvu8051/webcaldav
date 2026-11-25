@@ -323,6 +323,12 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
     // In one column it has to be summoned.
     let form_open = RwSignal::new(false);
     let month_picker_open = RwSignal::new(false);
+    // Bumped every time something asks for the form. An effect watching
+    // `form_open` alone would not re-run when the form is already open and
+    // the user taps Edit on a different event.
+    let focus_form = RwSignal::new(0u32);
+    let summary_ref = NodeRef::<leptos::html::Input>::new();
+    let form_ref = NodeRef::<leptos::html::Form>::new();
     let form = EventForm::new();
 
     let calendar_color = move |calendar_url: &str| -> String {
@@ -514,6 +520,13 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
     };
 
     let open_new_event = move |_| {
+        // Already composing a new event? Then this is the user looking for the
+        // form, not asking for a blank one -- scroll to it and leave the
+        // contents alone. Tapping it used to wipe them silently.
+        if form_open.get_untracked() && editing_event.get_untracked().is_none() {
+            focus_form.update(|n| *n += 1);
+            return;
+        }
         let day = selected_day.get_untracked().unwrap_or(today);
         selected_day.set(Some(day));
         editing_event.set(None);
@@ -521,12 +534,14 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
         form.calendar_url.set(first_visible_calendar());
         form.set_default_day(day);
         form_open.set(true);
+        focus_form.update(|n| *n += 1);
     };
 
     let start_edit = move |event: EventSummary| {
         form.fill_from(&event);
         editing_event.set(Some(event));
         form_open.set(true);
+        focus_form.update(|n| *n += 1);
     };
 
     // Closes the form, whichever kind it is. It used to be reachable only
@@ -554,6 +569,30 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
     });
     let removing = remove.pending();
     let remove_input = remove.input();
+
+    // The form sits below the grid, so on a phone opening it changes nothing
+    // you can see without scrolling -- which reads as the button not working.
+    // Runs as an effect because the form is behind a `Show` and does not
+    // exist yet at the moment the handler sets `form_open`.
+    #[cfg(feature = "hydrate")]
+    Effect::new(move |_| {
+        focus_form.track();
+        if !form_open.get() {
+            return;
+        }
+        // Focus first, then scroll: focusing an input makes the browser
+        // scroll it into view on its own, and doing that second would undo
+        // the alignment chosen here.
+        if let Some(input) = summary_ref.get() {
+            let _ = input.focus();
+        }
+        // The whole sheet, aligned to the top of the viewport. Aligning the
+        // title field to the *bottom* -- which is what the default does --
+        // parks it under where the keyboard is about to appear.
+        if let Some(form) = form_ref.get() {
+            form.scroll_into_view_with_bool(true);
+        }
+    });
 
     let events_on = move |day: NaiveDate| -> Vec<EventSummary> {
         let prefix = day.format("%Y-%m-%d").to_string();
@@ -713,20 +752,15 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
 
                     // `button-primary`: Action Blue, full pill, body text. The
                     // press-scale is global in lib.rs so it cannot be left off.
-                    // Hidden while the form is open: the form is the add
-                    // affordance at that point, and tapping this again only
-                    // cleared what had been typed without closing anything.
-                    <Show when=move || !form_open.get()>
-                        <button
-                            type="button"
-                            data-testid="add-event"
-                            class="w-full h-12 rounded-full bg-action text-canvas text-body flex items-center justify-center gap-2"
-                            on:click=open_new_event
-                        >
-                            <span class="material-symbols-outlined text-[20px]">"add"</span>
-                            "Add event"
-                        </button>
-                    </Show>
+                    <button
+                        type="button"
+                        data-testid="add-event"
+                        class="w-full h-12 rounded-full bg-action text-canvas text-body flex items-center justify-center gap-2"
+                        on:click=open_new_event
+                    >
+                        <span class="material-symbols-outlined text-[20px]">"add"</span>
+                        "Add event"
+                    </button>
                 </div>
 
                 <div class="flex flex-col gap-2">
@@ -1056,6 +1090,7 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                             </div>
 
                             <form
+                                node_ref=form_ref
                                 data-testid="event-form"
                                 on:keydown=move |ev: leptos::ev::KeyboardEvent| {
                                     if ev.key() == "Escape" {
@@ -1078,6 +1113,7 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                                 </select>
                                 <input
                                     data-testid="form-summary"
+                                    node_ref=summary_ref
                                     class=FIELD
                                     type="text"
                                     placeholder="Title"

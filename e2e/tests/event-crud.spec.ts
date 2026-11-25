@@ -9,9 +9,6 @@ test.describe('creating, editing and deleting events', () => {
     await expect(page.getByTestId('add-event')).toBeVisible()
     await page.getByTestId('add-event').click()
     await expect(page.getByTestId('event-form')).toBeVisible()
-    // And the button steps aside rather than sitting on top of the form it
-    // just opened -- which is where this started.
-    await expect(page.getByTestId('add-event')).toHaveCount(0)
   })
 
   test('a new event is PUT to the server and shows up on the day', async ({ mock, page, connected }) => {
@@ -218,17 +215,60 @@ test.describe('creating, editing and deleting events', () => {
     await expect(page.getByTestId('event-form')).toHaveCount(0)
   })
 
-  test('the Add event button steps aside while the form is open', async ({ page, connected }) => {
+  test('the Add event button stays put while the form is open', async ({ page, connected }) => {
     void connected
-    // It was still there, and tapping it wiped whatever had been typed
-    // without closing anything -- two buttons for one job, one of them
-    // destructive.
     await expect(page.getByTestId('add-event')).toBeVisible()
     await page.getByTestId('add-event').click()
-    await expect(page.getByTestId('add-event')).toHaveCount(0)
-
-    await page.getByTestId('form-cancel').click()
     await expect(page.getByTestId('add-event')).toBeVisible()
+  })
+
+  test('opening the form focuses the title and scrolls it into view', async ({ page, connected }) => {
+    void connected
+    // The form sits below the grid, so on a phone opening it changed nothing
+    // visible without scrolling -- which reads as the button not working.
+    await page.evaluate(() => window.scrollTo(0, 0))
+    await page.getByTestId('add-event').click()
+    await expect(page.getByTestId('form-summary')).toBeFocused()
+    await expect(page.getByTestId('form-summary')).toBeInViewport()
+  })
+
+  test('tapping Add event again goes to the form instead of emptying it', async ({ page, connected }) => {
+    void connected
+    await page.getByTestId('add-event').click()
+    await page.getByTestId('form-summary').fill('Still typing')
+    await page.evaluate(() => window.scrollTo(0, 0))
+
+    await page.getByTestId('add-event').click()
+    // The user is looking for the form, not asking for a blank one.
+    await expect(page.getByTestId('form-summary')).toHaveValue('Still typing')
+    await expect(page.getByTestId('form-summary')).toBeFocused()
+    await expect(page.getByTestId('form-summary')).toBeInViewport()
+  })
+
+  test('Edit focuses the form it just filled in', async ({ page, connected }) => {
+    void connected
+    await dayCell(page, isoDay(0)).click()
+    await page.evaluate(() => window.scrollTo(0, 0))
+    await page.locator('[data-testid="event-card"]').filter({ hasText: 'Standup' }).getByTestId('event-edit').click()
+
+    await expect(page.getByTestId('form-summary')).toHaveValue('Standup')
+    await expect(page.getByTestId('form-summary')).toBeFocused()
+    await expect(page.getByTestId('form-summary')).toBeInViewport()
+  })
+
+  test('Edit on a second event re-focuses, even though the form was already open', async ({ page, connected }) => {
+    void connected
+    await dayCell(page, isoDay(0)).click()
+    await page.locator('[data-testid="event-card"]').filter({ hasText: 'Standup' }).getByTestId('event-edit').click()
+    await expect(page.getByTestId('form-summary')).toHaveValue('Standup')
+
+    await page.evaluate(() => window.scrollTo(0, 0))
+    await page.locator('[data-testid="event-card"]').filter({ hasText: 'Design review' }).getByTestId('event-edit').click()
+    // `form_open` never changed, so an effect watching only that would not
+    // have re-run. This is what the focus nonce is for.
+    await expect(page.getByTestId('form-summary')).toHaveValue('Design review')
+    await expect(page.getByTestId('form-summary')).toBeFocused()
+    await expect(page.getByTestId('form-summary')).toBeInViewport()
   })
 
   test('the form reopens empty after being dismissed', async ({ page, connected }) => {

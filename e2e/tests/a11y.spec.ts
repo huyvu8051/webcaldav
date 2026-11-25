@@ -123,6 +123,7 @@ test.describe('keyboard', () => {
     // "no outline" for every element on the page -- which is how the first
     // version of this test flagged 62 false positives.
     const bare: string[] = []
+    let previous: string | null = null
     for (let i = 0; i < 14; i++) {
       await page.keyboard.press('Tab')
       const info = await page.evaluate(() => {
@@ -136,9 +137,25 @@ test.describe('keyboard', () => {
           visible: outlined || ringed,
         }
       })
+      // A datetime-local is several tab stops inside one element: Chromium
+      // walks its day/month/year segments while document.activeElement stays
+      // the input, and the outer outline is suppressed mid-walk. The control
+      // itself is checked directly below.
+      if (info && info.id === previous) continue
+      if (info) previous = info.id
       if (info && !info.visible) bare.push(info.id)
     }
     expect(bare).toEqual([])
+
+    // The composite date fields, measured by focusing them outright.
+    for (const id of ['form-start', 'form-end']) {
+      await page.getByTestId(id).focus()
+      const visible = await page.getByTestId(id).evaluate((e) => {
+        const s = getComputedStyle(e)
+        return (s.outlineStyle !== 'none' && parseFloat(s.outlineWidth) > 0) || s.boxShadow !== 'none'
+      })
+      expect(visible, `${id} has no focus indicator`).toBe(true)
+    }
   })
 
   test('the month picker announces whether it is open', async ({ mock, page }) => {
