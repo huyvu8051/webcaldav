@@ -18,6 +18,7 @@
   },
   "homepage": "https://github.com/huyvu8051/webcaldav#readme",
   "devDependencies": {
+    "@axe-core/playwright": "^4.14.1",
     "@playwright/test": "^1.65.1"
   },
   "private": true

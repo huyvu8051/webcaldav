@@ -1,6 +1,7 @@
 # Backlog
 
-Eight bugs found by the e2e suite on 2026-11-25, none fixed yet. Each one has
+Fourteen bugs found by the e2e suite on 2026-11-25, none fixed yet: eight
+functional and six accessibility. Each one has
 a `test.fail` in `e2e/` asserting the behaviour that *should* hold, paired with
 a passing test pinning what currently happens — so a fix flips the pair and a
 regression flips it back.
@@ -26,6 +27,12 @@ lines and removes most of the app's latency. 4, 6, 7, 8 are smaller.
 | 6 | Nameless calendar renders as `{}` | `rsdav`, or band-aid here | small |
 | 7 | Layout breaks without Google Fonts / Tailwind CDN | `lib.rs` + `Dockerfile` | medium |
 | 8 | Angle brackets stripped from a summary | `rsdav` parse path | small |
+| A1 | Five form selects have no accessible name | `calendar_grid.rs` | **5 lines** |
+| A2 | Muted text fails WCAG AA contrast (3.94:1) | `lib.rs` token | design call |
+| A3 | A day cell announces only its number | `calendar_grid.rs` | small |
+| A4 | Nothing is announced: no live region anywhere | `calendar_grid.rs` | small |
+| A5 | The calendar page has one heading | `calendar_grid.rs` | small |
+| A6 | Month picker has no `aria-controls` | `calendar_grid.rs` | one line |
 
 ---
 
@@ -193,6 +200,100 @@ line parse downstream of it. Possibly the same leak as #6.
 **Test**: `angle brackets in a summary survive`.
 
 ---
+
+## A1-A6 — accessibility
+
+Found by `e2e/tests/a11y.spec.ts`: an axe-core sweep (WCAG 2.1 A/AA plus
+best-practice) over five page states, and handwritten tests for the things a
+scanner cannot see. 50 assertions, and the sweep is clean apart from the two
+rules tracked below.
+
+**What already holds**, and is now locked in: tab order is the reading order
+(disconnect → month → today → prev → next → add event → day cells); day cells
+are real `<button>`s so Enter and Space both work with no roving-tabindex
+machinery; every tabbed control shows a focus indicator; every icon-only button
+has an `aria-label`; `aria-expanded` on the month disclosure and `aria-busy` on
+the pending buttons are correct; the spinner is `aria-hidden`; `lang` and
+`<title>` are set; the landmarks are present and unique.
+
+### A1 — five selects have no accessible name (axe: critical)
+
+`form-calendar-url`, `form-priority`, `form-busy`, `form-reminder-preset` and
+`form-travel-preset` use their first `<option>` as a pseudo-label -- "Priority",
+"Status", "No reminder", "No travel time". A screen reader announces the
+current value and nothing about what the control is for. The month and year
+selects in the picker already have `aria-label`, so this is just five more of
+the same.
+
+**Fix** — `aria-label` on each, matching the pseudo-label already in the first
+option.
+
+`every select has an accessible name`
+
+### A2 — the muted text token fails contrast
+
+`#7a7a7a` on the `#f5f5f7` page background is **3.94:1**; WCAG AA wants 4.5:1
+at these sizes. It is not one stray element: `ink-48` carries the fine print,
+the weekday initials, the connected username, the sync line and every event
+time, so it is around twenty nodes per page.
+
+**Fix** — darken the token. `#6b6b6b` clears 4.5:1 on `#f5f5f7`; verify against
+`#ffffff` cards too, where it currently passes. This is a change to
+DESIGN.md's palette rather than a patch, which is why it is not done here --
+the token is vendored from apple.com and moving it is a decision, not a typo.
+
+`text meets WCAG AA contrast`
+
+### A3 — a day cell announces only its number
+
+The entire accessible name of a day is "25, button". No month, no year, no
+"today", no count of what is on it, and no indication that it is the selected
+one. Those are exactly the three things the design communicates visually and
+only visually -- a filled disc, a blue number, coloured dots. This is the app's
+main interaction and the least legible part of it without sight.
+
+**Fix** — `aria-label` built from the data already on the element, plus the two
+state attributes:
+
+```rust
+aria-label=move || format!("{}{}{}",
+    day.format("%A %-d %B %Y"),
+    if is_today { ", today" } else { "" },
+    match day_events.len() { 0 => String::new(), n => format!(", {n} events") })
+aria-current=move || if is_today { "date" } else { "false" }
+aria-pressed=move || is_selected().to_string()
+```
+
+`a day cell says which day it is and what is on it`
+
+### A4 — nothing asynchronous is ever announced
+
+There is no live region anywhere on the page. Not "Updating…", not
+"Updated 14:32", and -- worst -- not the error banner. A save that fails is
+already silent to a sighted user on some paths (#1 above); to a screen reader
+user it is silent on all of them.
+
+**Fix** — `role="alert"` on the error banner (assertive, since it is a
+failure), and `aria-live="polite"` on the sync line.
+
+`errors are announced, not just displayed`
+
+### A5 — one heading on the whole calendar page
+
+Only the "Calendar" `h1` in the top bar. The month name used to be an `h2` and
+became a `<button>` when the picker was added; "Calendars" and the selected
+date are `<span>`s. There is nothing to skim by heading.
+
+**Fix** — wrap the month button in an `h2`, and make "Calendars" and the
+selected date `h2`/`h3`. Visual styling does not have to change.
+
+`the page has headings to navigate by`
+
+### A6 — the month disclosure has no `aria-controls`
+
+`aria-expanded` is right, which is the important half. `aria-controls`
+pointing at the picker container would complete it. One line, lowest priority
+of the six.
 
 ## Already fixed
 

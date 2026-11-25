@@ -1,6 +1,6 @@
 # End-to-end tests
 
-158 tests across 10 specs. `npm run e2e`.
+208 tests across 11 specs. `npm run e2e`.
 
 ```bash
 npm run e2e              # everything, both projects
@@ -43,6 +43,26 @@ the viewport this app is built for. `desktop` runs only `responsive` and
 `design-system`, because the only thing specifically about desktop is that the
 same column sits centred in more background. Running the behavioural suite
 twice mostly bought engine-specific noise.
+
+## Accessibility
+
+`a11y.spec.ts` is an axe-core sweep (WCAG 2.1 A/AA plus best-practice) over
+five page states, plus handwritten tests for what a scanner cannot see. The
+sweep is clean apart from two rules, and six gaps are tracked in `BACKLOG.md`
+as A1-A6 -- the loudest being five selects with no accessible name, muted text
+at 3.94:1 against a 4.5:1 requirement, and day cells that announce nothing but
+a number.
+
+It runs on both projects deliberately: **WebKit will not move focus with Tab**
+unless Full Keyboard Access is on, so a keyboard-order assertion there would
+pass by never moving at all. Those two tests skip on WebKit and run on
+Chromium, which is the honest place to measure them.
+
+One more bad measurement worth remembering: a programmatic `.focus()` does not
+set `:focus-visible`, so reading the computed style after one reports "no
+outline" for every element on the page. The first version of the focus-ring
+test flagged 62 false positives that way. It now presses Tab and reads the
+style at each stop.
 
 ## Known bugs, tracked as expected failures
 

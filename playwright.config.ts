@@ -28,7 +28,9 @@ export default defineConfig({
     {
       name: 'desktop',
       use: { ...devices['Desktop Chrome'] },
-      testMatch: /(responsive|design-system)\.spec\.ts/,
+      // a11y runs here too: WebKit will not move focus with Tab unless Full
+      // Keyboard Access is on, so keyboard order has to be measured on Chromium.
+      testMatch: /(responsive|design-system|a11y)\.spec\.ts/,
     },
   ],
   webServer: {
