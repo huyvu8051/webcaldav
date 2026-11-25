@@ -24,9 +24,25 @@ pub fn TopBar(#[prop(into)] username: Signal<String>) -> impl IntoView {
                     <h1 class="text-tagline font-semibold text-ink truncate">"Calendar"</h1>
                 </div>
                 <div class="flex items-center gap-3 shrink-0">
-                    <span data-testid="topbar-username" class="text-caption text-ink-48 truncate max-w-[120px]">
-                        {move || username.get()}
-                    </span>
+                    // Until the name is known the bar shows a skeleton rather
+                    // than an empty gap. The gap read as "no account", which is
+                    // the same thing a failed load looks like.
+                    <Show
+                        when=move || !username.get().is_empty()
+                        fallback=|| {
+                            view! {
+                                <span
+                                    data-testid="topbar-username-skeleton"
+                                    aria-hidden="true"
+                                    class="w-16 h-3 rounded-full bg-divider-soft"
+                                ></span>
+                            }
+                        }
+                    >
+                        <span data-testid="topbar-username" class="text-caption text-ink-48 truncate max-w-[120px]">
+                            {move || username.get()}
+                        </span>
+                    </Show>
                     // The only interactive element here, so the only one
                     // wearing Action Blue.
                     <button

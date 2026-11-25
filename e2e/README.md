@@ -1,6 +1,6 @@
 # End-to-end tests
 
-221 tests across 12 specs. `npm run e2e`.
+223 tests across 12 specs. `npm run e2e`.
 
 ```bash
 npm run e2e              # everything, both projects

@@ -29,15 +29,19 @@ lines and removes most of the app's latency. 4, 6, 7, 8 are smaller.
 | 8 | Angle brackets stripped from a summary | `rsdav` parse path | small |
 | **S1** | **A page that cannot hydrate looks signed in and cannot be left** | `lib.rs` + `deployment.yaml` | **medium, do first** |
 | S2 | A corrupt stored config is left in localStorage | `storage.rs` | one line |
+| S3 | 9.4 MB wasm — ~2s of blank before hydration even on a good connection | `Cargo.toml` + `Dockerfile` | medium |
 
 ---
 
 ## S1 — a page that cannot hydrate looks signed in, and traps you
 
-The symptom, reproduced three ways: you are on `/calendar`, **no username is
-shown, Disconnect does nothing, no calendars load, and no error appears**. The
-page looks like a normal empty calendar. The only way out is clearing site
-data by hand.
+The symptom, reproduced three ways: you are on `/calendar`, **the name never
+fills in, Disconnect does nothing, no calendars load, and no error appears**.
+The only way out is clearing site data by hand.
+
+Partly improved since: the page now sits on "Updating…" with a name skeleton,
+so it reads as *stuck* rather than as a finished empty account. That removes
+the lie but not the dead end.
 
 `username`, the CalDAV config and the Disconnect handler are all set inside
 the `#[cfg(feature = "hydrate")]` effect in `calendar_grid.rs`. If the WASM
@@ -90,6 +94,45 @@ fact, a corrupt stored config and storage blocked entirely all behave properly
 — the username shows, the error shows, and Disconnect works.
 
 ---
+
+## S3 — the bundle is 9.4 MB, and hydration is the slow part
+
+Measured against the deployed build, from a machine on a good connection:
+
+| | |
+|---|---|
+| HTML painted | 566 ms |
+| wasm request starts | 584 ms |
+| wasm finished arriving | 2347 ms (1.02 MB on the wire) |
+| **username appears** | **2498 ms** |
+
+So roughly **two seconds of a page that is fully painted but not yet alive**,
+and that is the good case. A `curl` of the same file over the tunnel took
+**5.6 s** at 186 KB/s, and a phone on mobile data will be worse. On localhost,
+where the download is 30 ms, it still takes **1.1 s** — that part is the
+browser compiling and instantiating the module, and no amount of CDN tuning
+removes it.
+
+Compression is already fine: Cloudflare serves it `zstd`, 9.38 MB → 1.02 MB.
+The problem is the 9.4 MB input.
+
+**Fixed for now** by covering the window honestly — the server-rendered page
+shows "Updating…", a spinner and a name skeleton, so the wait is visible
+instead of looking like a finished empty calendar. That is a dressing, not a
+cure.
+
+**Actually fixing it** means making the bundle smaller:
+
+- there is no `[profile.release]` in `Cargo.toml` at all. `opt-level = "z"`,
+  `lto = true`, `codegen-units = 1`, `panic = "abort"` and `strip = true` are
+  the usual first cut
+- run `wasm-opt -Oz` in the `wasm-builder` stage
+- check what is actually pulling weight: `chrono` with full locale data and
+  `serde_json` are the usual suspects in a Leptos wasm build. `twiggy top` or
+  `wasm-opt --print-function-sizes` will say rather than guess
+
+Worth doing before S1's affinity fix, since a smaller bundle shortens the
+window S1 is about.
 
 ## S2 — a corrupt stored config is left behind
 

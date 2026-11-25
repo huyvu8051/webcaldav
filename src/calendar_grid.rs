@@ -388,8 +388,16 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
         }
     });
     let booting = bootstrap.pending();
-    // One flag for "a read is in flight", whichever of the two it is.
-    let loading = Signal::derive(move || booting.get() || refreshing.get());
+    // False on the server and on the client's first render, so the two agree
+    // and hydration has nothing to reconcile. Flipped once the effect below
+    // has actually run.
+    let hydrated = RwSignal::new(false);
+    // One flag for "a read is in flight", whichever of the two it is -- plus
+    // the window before any of them can have started. Without that last term
+    // the server renders a finished-looking empty calendar and the first sign
+    // of life is the username appearing ~2s later: measured 566ms to painted
+    // HTML, 2498ms to username, on a desktop with a good connection.
+    let loading = Signal::derive(move || !hydrated.get() || booting.get() || refreshing.get());
 
     #[cfg(feature = "hydrate")]
     {
@@ -399,6 +407,7 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                 navigate("/", Default::default());
                 return;
             };
+            hydrated.set(true);
             username.set(cfg.username.clone());
             config.set(Some(cfg.clone()));
             bootstrap.dispatch(cfg.clone());

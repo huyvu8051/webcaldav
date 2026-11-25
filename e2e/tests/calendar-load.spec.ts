@@ -1,6 +1,44 @@
 import { test, expect, seedSession, waitForIdle, isoDay, dayCell } from '../fixtures/app'
 
 test.describe('loading the calendar', () => {
+  test('the server-rendered page already says it is working', async ({ page }) => {
+    // The window between painted HTML and a hydrated page is not small:
+    // measured on the deployed build, 566ms to painted and 2498ms to the
+    // username, and the wasm is 1MB on the wire after compression. Before
+    // this, that whole stretch showed a finished-looking empty calendar with
+    // no username and no indication anything was happening.
+    const html = await (await page.request.get('/calendar')).text()
+    expect(html).toContain('Updating')
+    expect(html).toContain('data-testid="sync-line"')
+    expect(html).toContain('data-testid="topbar-username-skeleton"')
+    // The server cannot know who is signed in -- credentials never leave the
+    // browser -- so the name is genuinely absent until the client says so.
+    expect(html).not.toContain('data-testid="topbar-username"')
+  })
+
+  test('the loading state is visible until the wasm arrives', async ({ mock, page }) => {
+    void mock
+    let release!: () => void
+    const held = new Promise<void>((r) => (release = r))
+    await page.route('**/pkg/*.wasm', async (route) => {
+      await held
+      await route.continue()
+    })
+    await seedSession(page)
+    await page.goto('/calendar', { waitUntil: 'commit' })
+
+    // Hydration cannot have run yet, and the page still explains itself.
+    await expect(page.getByTestId('sync-line')).toContainText('Updating')
+    // Count, not visibility: this spec runs without Tailwind, so the
+    // skeleton's w-16/h-3 never apply and it measures zero.
+    await expect(page.getByTestId('topbar-username-skeleton')).toHaveCount(1)
+    await expect(page.getByTestId('topbar-username')).toHaveCount(0)
+
+    release()
+    await expect(page.getByTestId('topbar-username')).toHaveText('alice', { timeout: 30_000 })
+    await expect(page.getByTestId('topbar-username-skeleton')).toHaveCount(0)
+  })
+
   test('no stored session sends you back to connect', async ({ mock, page }) => {
     void mock
     await page.goto('/calendar')

@@ -5,8 +5,10 @@ import { test, expect, seedSession, CREDS } from '../fixtures/app'
  *
  * `username`, the CalDAV config and the Disconnect handler are all set inside
  * the `#[cfg(feature = "hydrate")]` effect, so if the WASM never runs the
- * server-rendered page stays on screen looking logged in: no username, a
- * Disconnect button that is inert, no calendars, and no error saying why.
+ * server-rendered page stays on screen: a name skeleton that never fills in,
+ * a permanent "Updating…", an inert Disconnect, no calendars, and no error
+ * saying why. It reads as stuck rather than as an empty account -- which is
+ * an improvement on where it started -- but it is still a dead end.
  *
  * This is not hypothetical. Each pod bakes in exactly one content-hashed
  * bundle and serves 404 for any other hash; the Service has
@@ -27,6 +29,7 @@ async function sessionState(page: import('@playwright/test').Page) {
     return {
       path: location.pathname,
       username: document.querySelector('[data-testid="topbar-username"]')?.textContent?.trim() ?? null,
+      skeleton: !!document.querySelector('[data-testid="topbar-username-skeleton"]'),
       hasDisconnect: !!document.querySelector('[data-testid="disconnect"]'),
       calendars: document.querySelectorAll('[data-testid="calendar-row"]').length,
       error: !!document.querySelector('[data-testid="status-error"]'),
@@ -50,14 +53,16 @@ test.describe('a page that never hydrates', () => {
       await page.waitForTimeout(2500)
 
       const s = await sessionState(page)
-      // Current behaviour, pinned. Every one of these is wrong together:
-      // on the signed-in route, no username, a Disconnect that does nothing,
-      // no calendars and no explanation.
+      // Current behaviour, pinned. The page at least no longer looks
+      // *finished*: since the pre-hydration loading state was added it sits
+      // on "Updating…" with a name skeleton, which reads as stuck rather than
+      // as an empty account. It is still a trap, though -- see below.
       expect(s.path).toBe('/calendar')
-      expect(s.username).toBe('')
+      expect(s.username, 'the name never arrives').toBeNull()
+      expect(s.skeleton, 'stuck on the loading skeleton forever').toBe(true)
       expect(s.hasDisconnect).toBe(true)
       expect(s.calendars).toBe(0)
-      expect(s.error).toBe(false)
+      expect(s.error, 'nothing ever says what went wrong').toBe(false)
     })
 
     test(`${name}: Disconnect does nothing, so there is no way out`, async ({ mock, page }) => {
@@ -84,7 +89,8 @@ test.describe('a page that never hydrates', () => {
     await page.waitForTimeout(2500)
     const s = await sessionState(page)
     expect(s.path).toBe('/calendar')
-    expect(s.username).toBe('')
+    expect(s.username).toBeNull()
+    expect(s.skeleton).toBe(true)
     expect(s.error).toBe(false)
   })
 
