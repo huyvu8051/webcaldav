@@ -2,15 +2,53 @@ use crate::dav::{self, CalendarSummary, EventSummary, NewEvent};
 use crate::layout::{Footer, TopBar};
 #[cfg_attr(not(feature = "hydrate"), allow(unused_imports))]
 use crate::storage::{self, CalendarPrefs, ConnectionConfig};
-use chrono::{Datelike, Duration, NaiveDate, Weekday};
+use chrono::{Datelike, Duration, NaiveDate};
 use leptos::prelude::*;
-use leptos::task::spawn_local;
+use crate::ui::{PendingButton, PendingIconButton};
 use leptos_router::hooks::use_navigate;
 use std::collections::{HashMap, HashSet};
 
 const REMINDER_PRESETS: &[(&str, i64)] = &[("5", 5), ("15", 15), ("30", 30), ("60", 60), ("1440", 1440), ("2880", 2880), ("10080", 10080)];
 const TRAVEL_PRESETS: &[(&str, i64)] = &[("0", 0), ("15", 15), ("30", 30), ("45", 45), ("60", 60), ("90", 90)];
-const COLOR_POOL: &[&str] = &["#2BE8C9", "#FF5500", "#00F5FF", "#A78BFA", "#F472B6", "#34D399", "#F87171", "#60A5FA", "#FBBF24", "#FB923C"];
+/// Seed colours for calendars with no stored preference.
+///
+/// DESIGN.md's single-accent rule governs chrome, not categorical data colour
+/// — four calendars have to be tellable apart, and the colour is user-owned
+/// (there is a picker per calendar). Muted so they sit beside Action Blue.
+///
+/// Referenced only under `hydrate`, so an ssr-only check reports it dead.
+/// Deleting it breaks the wasm build.
+const COLOR_POOL: &[&str] = &[
+    "#0066cc", "#8e5bd0", "#c0567a", "#2f9e6e", "#c2703c", "#4a7fb5", "#9a7b3f", "#6b6f76",
+];
+
+/// Single-line form controls. Pill radius per DESIGN.md's `search-input`.
+/// 17px is both the system body size and the floor below which iOS zooms on
+/// focus.
+// A macro, not a const: `concat!` takes literals only, and SELECT below
+// has to be built from this same string rather than a copy of it.
+macro_rules! field_base {
+    () => {
+        "w-full h-11 bg-canvas border border-black/[0.08] rounded-full \
+    text-body text-ink placeholder:text-ink-48 px-4 \
+    focus:outline-none focus:border-action-focus focus:ring-1 focus:ring-action-focus \
+    transition-colors"
+    };
+}
+const FIELD: &str = field_base!();
+
+/// A bare `select` keeps the browser's own arrow, which it paints hard
+/// against the right edge -- outside the pill's curve, and at a different
+/// inset for every control width. `field-select` (lib.rs) suppresses it and
+/// draws one chevron at the same 16px inset as the text.
+const SELECT: &str = concat!(field_base!(), " field-select");
+
+/// The one control that cannot be a pill: a two-row textarea needs a radius
+/// that reads at its corners, so it takes the card radius instead.
+const FIELD_AREA: &str = "w-full bg-canvas border border-black/[0.08] rounded-lg \
+    text-body text-ink placeholder:text-ink-48 px-4 py-3 resize-none \
+    focus:outline-none focus:border-action-focus focus:ring-1 focus:ring-action-focus \
+    transition-colors";
 
 fn unit_multiplier(unit: &str) -> i64 {
     match unit {
@@ -246,11 +284,13 @@ fn grid_cells(first_of_month: NaiveDate) -> Vec<(NaiveDate, bool)> {
         .collect()
 }
 
+/// How busy a day is. Reads out in the day header, not the month cell — a
+/// ~53px cell fits a date and some dots and nothing more.
 fn slot_label(count: usize) -> String {
     match count {
-        0 => "FREE".to_string(),
-        1 => "1 SLOT".to_string(),
-        n => format!("{n} SLOTS"),
+        0 => "No events".to_string(),
+        1 => "1 event".to_string(),
+        n => format!("{n} events"),
     }
 }
 
@@ -267,42 +307,89 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
     let hidden_calendars = RwSignal::new(HashSet::<String>::new());
 
     let events = RwSignal::new(Vec::<EventSummary>::new());
-    let loading = RwSignal::new(true);
     let status = RwSignal::new(String::new());
     let latency_ms = RwSignal::new(Option::<i64>::None);
-    let last_synced = RwSignal::new(Option::<String>::None);
+    // A timestamp, not a formatted string: the "is this stale" test on
+    // tab focus needs to subtract it, and the display can format it.
+    let last_synced = RwSignal::new(Option::<chrono::DateTime<chrono::Local>>::None);
 
     let today = chrono::Local::now().date_naive();
     let current_month = RwSignal::new(NaiveDate::from_ymd_opt(today.year(), today.month(), 1).unwrap());
     let selected_day = RwSignal::new(Option::<NaiveDate>::None);
 
     let editing_event = RwSignal::new(Option::<EventSummary>::None);
+    // The form lived in a desktop sidebar and was always visible, which left
+    // a button sitting on top of an open form once the columns collapsed.
+    // In one column it has to be summoned.
+    let form_open = RwSignal::new(false);
+    let month_picker_open = RwSignal::new(false);
     let form = EventForm::new();
 
     let calendar_color = move |calendar_url: &str| -> String {
-        calendar_colors.get().get(calendar_url).cloned().unwrap_or_else(|| "#2BE8C9".to_string())
+        calendar_colors.get().get(calendar_url).cloned().unwrap_or_else(|| COLOR_POOL[0].to_string())
     };
 
-    let refresh_events = move || {
+    // Every network call on this page is an Action. `.pending()` is derived
+    // from an in-flight counter the runtime maintains, so a flag can no
+    // longer be left stuck by an error path, and the button bound to it is
+    // reading the request's real state rather than a copy of it.
+    let refresh = Action::new_local(move |_: &()| async move {
         let Some(cfg) = config.get_untracked() else { return };
         let urls: Vec<String> = calendars.get_untracked().iter().map(|c| c.url.clone()).collect();
         if urls.is_empty() {
             return;
         }
-        loading.set(true);
-        spawn_local(async move {
-            match dav::list_events_for_calendars(&cfg, &urls).await {
-                Ok(fetch) => {
-                    events.set(fetch.events);
-                    latency_ms.set(Some(fetch.latency_ms));
-                    last_synced.set(Some(chrono::Local::now().format("%H:%M:%S").to_string()));
-                    status.set(String::new());
-                }
-                Err(e) => status.set(format!("Failed to load events: {e}")),
+        match dav::list_events_for_calendars(&cfg, &urls).await {
+            Ok(fetch) => {
+                events.set(fetch.events);
+                latency_ms.set(Some(fetch.latency_ms));
+                last_synced.set(Some(chrono::Local::now()));
+                status.set(String::new());
             }
-            loading.set(false);
-        });
+            Err(e) => status.set(format!("Failed to load events: {e}")),
+        }
+    });
+    let refreshing = refresh.pending();
+    // Dispatching twice really does run twice. Four callers -- mount, save,
+    // delete, tab focus -- can collide, and the slower response would win
+    // regardless of which request was newer.
+    let refresh_events = move || {
+        if !refreshing.get_untracked() {
+            refresh.dispatch(());
+        }
     };
+
+    // Opening the page is itself a request, so it is an action too -- that is
+    // what keeps "Updating…" on screen from first paint instead of appearing
+    // only once the second call starts.
+    let bootstrap = Action::new_local(move |cfg: &ConnectionConfig| {
+        let cfg = cfg.clone();
+        async move {
+            match dav::list_calendars(&cfg).await {
+                Ok(found) => {
+                    let mut prefs = storage::load_calendar_prefs();
+                    let mut changed = false;
+                    for (i, cal) in found.iter().enumerate() {
+                        if !prefs.colors.contains_key(&cal.url) {
+                            prefs.colors.insert(cal.url.clone(), COLOR_POOL[i % COLOR_POOL.len()].to_string());
+                            changed = true;
+                        }
+                    }
+                    if changed {
+                        storage::save_calendar_prefs(&prefs);
+                    }
+                    calendar_colors.set(prefs.colors);
+                    hidden_calendars.set(prefs.hidden.into_iter().filter(|(_, hidden)| *hidden).map(|(url, _)| url).collect());
+                    calendars.set(found);
+                    refresh_events();
+                }
+                Err(e) => status.set(format!("Failed to load calendars: {e}")),
+            }
+        }
+    });
+    let booting = bootstrap.pending();
+    // One flag for "a read is in flight", whichever of the two it is.
+    let loading = Signal::derive(move || booting.get() || refreshing.get());
 
     #[cfg(feature = "hydrate")]
     {
@@ -314,29 +401,36 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
             };
             username.set(cfg.username.clone());
             config.set(Some(cfg.clone()));
-            spawn_local(async move {
-                match dav::list_calendars(&cfg).await {
-                    Ok(found) => {
-                        let mut prefs = storage::load_calendar_prefs();
-                        let mut changed = false;
-                        for (i, cal) in found.iter().enumerate() {
-                            if !prefs.colors.contains_key(&cal.url) {
-                                prefs.colors.insert(cal.url.clone(), COLOR_POOL[i % COLOR_POOL.len()].to_string());
-                                changed = true;
-                            }
-                        }
-                        if changed {
-                            storage::save_calendar_prefs(&prefs);
-                        }
-                        calendar_colors.set(prefs.colors);
-                        hidden_calendars.set(prefs.hidden.into_iter().filter(|(_, hidden)| *hidden).map(|(url, _)| url).collect());
-                        calendars.set(found);
-                        refresh_events();
-                    }
-                    Err(e) => status.set(format!("Failed to load calendars: {e}")),
-                }
-            });
+            bootstrap.dispatch(cfg.clone());
         });
+    }
+
+
+    // Nothing here polls, so returning to the tab is the only moment the app
+    // can notice someone changed the calendar from another device. Apple
+    // Calendar, Thunderbird and DAVx5 all refresh on foreground for the same
+    // reason -- they just also poll on a timer, which this does not yet.
+    #[cfg(feature = "hydrate")]
+    {
+        // A full fetch pulls every event in every calendar, so an alt-tabbing
+        // user must not trigger one per switch. Below the floor the data is
+        // young enough that the round trip buys nothing.
+        const REFRESH_FLOOR_SECS: i64 = 60;
+        let handle = window_event_listener_untyped(
+            "visibilitychange",
+            move |_| {
+                if document().hidden() {
+                    return;
+                }
+                let stale = last_synced.get_untracked().map_or(true, |t| {
+                    (chrono::Local::now() - t).num_seconds() >= REFRESH_FLOOR_SECS
+                });
+                if stale {
+                    refresh_events();
+                }
+            },
+        );
+        on_cleanup(move || handle.remove());
     }
 
     let persist_prefs = move || {
@@ -375,13 +469,15 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
         form.set_default_day(day);
     };
 
-    let submit_event = move |ev: leptos::ev::SubmitEvent| {
-        ev.prevent_default();
-        let Some(cfg) = config.get_untracked() else { return };
+    let save = Action::new_local(move |_: &()| {
+        // Read the form at dispatch time, not inside the future: by the time
+        // it resolves the user may already be typing the next event.
+        let cfg = config.get_untracked();
         let target_calendar = form.calendar_url.get_untracked();
         let new_event = form.to_new_event();
         let editing = editing_event.get_untracked();
-        spawn_local(async move {
+        async move {
+            let Some(cfg) = cfg else { return };
             let result = match editing {
                 Some(existing) => dav::update_event(&cfg, &existing, &target_calendar, new_event).await,
                 None => dav::create_event(&cfg, &target_calendar, new_event).await,
@@ -390,32 +486,60 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                 Ok(()) => {
                     editing_event.set(None);
                     form.clear();
+                    // Closes only on success. A failed save leaves the form
+                    // open with what was typed still in it, rather than
+                    // dismissing the sheet and the work together.
+                    form_open.set(false);
                     refresh_events();
                 }
                 Err(e) => status.set(format!("Save failed: {e}")),
             }
-        });
+        }
+    });
+    let saving = save.pending();
+    let submit_event = move |ev: leptos::ev::SubmitEvent| {
+        ev.prevent_default();
+        save.dispatch(());
+    };
+
+    let open_new_event = move |_| {
+        let day = selected_day.get_untracked().unwrap_or(today);
+        selected_day.set(Some(day));
+        editing_event.set(None);
+        form.clear();
+        form.calendar_url.set(first_visible_calendar());
+        form.set_default_day(day);
+        form_open.set(true);
     };
 
     let start_edit = move |event: EventSummary| {
         form.fill_from(&event);
         editing_event.set(Some(event));
+        form_open.set(true);
     };
 
     let cancel_edit = move |_| {
         editing_event.set(None);
         form.clear();
+        form_open.set(false);
     };
 
-    let remove_event = move |event: EventSummary| {
-        let Some(cfg) = config.get_untracked() else { return };
-        spawn_local(async move {
+    // The input is the event itself, which is what lets a single action
+    // drive a per-row spinner: the view compares `remove.input()` against its
+    // own event instead of every row reacting to one shared flag.
+    let remove = Action::new_local(move |event: &EventSummary| {
+        let event = event.clone();
+        let cfg = config.get_untracked();
+        async move {
+            let Some(cfg) = cfg else { return };
             match dav::delete_event(&cfg, &event).await {
                 Ok(()) => refresh_events(),
                 Err(e) => status.set(format!("Delete failed: {e}")),
             }
-        });
-    };
+        }
+    });
+    let removing = remove.pending();
+    let remove_input = remove.input();
 
     let events_on = move |day: NaiveDate| -> Vec<EventSummary> {
         let prefix = day.format("%Y-%m-%d").to_string();
@@ -424,200 +548,216 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
     };
 
     view! {
-        <div class="fixed inset-0 pointer-events-none z-0">
-            <div class="absolute inset-0 bg-blueprint-grid opacity-75"></div>
-            <div class="absolute -top-40 left-1/2 -translate-x-1/2 w-[760px] h-[480px] bg-gradient-to-b from-[#2BE8C9]/10 via-[#00F5FF]/5 to-transparent blur-[130px] rounded-full"></div>
-            <div class="absolute bottom-0 right-1/4 w-[420px] h-[300px] bg-[#FF5500]/[0.04] blur-[110px] rounded-full"></div>
-        </div>
-
         <TopBar username=username/>
 
-        <main class="w-full flex-1 relative z-10">
-            <div class="flex flex-col w-full px-4 sm:px-6 py-6 max-w-[1280px] mx-auto">
+        // One column, phone-shaped. The background is painted on <body>, so a
+        // desktop viewport simply shows more parchment either side — there is
+        // no second layout to keep in step with this one.
+        <main class="w-full flex-1">
+            <div class="max-w-app mx-auto w-full px-4 py-5 flex flex-col gap-5">
+
                 <Show when=move || !status.get().is_empty()>
-                    <div class="flex items-start gap-2.5 p-3 mb-4 rounded border border-[#FF5500] bg-[#FF5500]/10 text-[#e6edf3] font-mono text-xs">
-                        <span class="material-symbols-outlined text-[18px] text-[#FF5500] mt-0.5">"error"</span>
-                        <span>{move || status.get()}</span>
+                    // Errors read as errors through wording and placement. The
+                    // old orange panel was a second accent, which DESIGN.md
+                    // rules out outright.
+                    <div class="flex items-start gap-2.5 p-4 rounded-lg bg-canvas border border-hairline">
+                        <span class="material-symbols-outlined text-[20px] text-ink-48 shrink-0">
+                            "error_outline"
+                        </span>
+                        <span class="text-caption text-ink-80">{move || status.get()}</span>
                     </div>
                 </Show>
 
-                <div class="flex flex-wrap items-center justify-between gap-4 mb-5">
-                    <div class="flex flex-wrap items-center gap-3">
-                        <span class="px-3 py-1 rounded bg-[#0D1117] border border-[#2BE8C9]/30 text-[#2BE8C9] font-mono text-xs tracking-wider uppercase flex items-center gap-2 shadow-[0_0_12px_rgba(43,232,201,0.15)]">
-                            <span class="material-symbols-outlined text-[14px]">"terminal"</span>
-                            "DAV ENGINE: RFC-4791"
-                        </span>
-                        <span class="text-[#8B949E] font-mono text-xs tracking-tight">
-                            {move || calendars.get().len()}" CALENDARS"
-                        </span>
-                    </div>
-                    <div class="flex items-center gap-4 text-[#8B949E] font-mono text-xs">
-                        <Show when=move || last_synced.get().is_some()>
-                            <span class="flex items-center gap-1.5 text-[#2BE8C9]">
-                                <span class="material-symbols-outlined text-[15px]">"cloud_done"</span>
-                                "SYNCED "{move || last_synced.get().unwrap_or_default()}
+                // Month navigation sits directly on the parchment. DESIGN.md
+                // takes its section breaks from surface-colour change rather
+                // than chrome, so the card below does the dividing and this
+                // needs no border of its own.
+                <div class="flex flex-col gap-3">
+                    <div class="flex items-center justify-between gap-2">
+                        // Tapping the title opens the picker, as iOS
+                        // Calendar does. The chevrons stay for stepping a
+                        // month at a time; the picker is for jumping.
+                        <button
+                            type="button"
+                            class="flex items-center gap-1 min-w-0 h-11 text-tagline font-semibold text-ink"
+                            aria-expanded=move || month_picker_open.get().to_string()
+                            on:click=move |_| month_picker_open.update(|v| *v = !*v)
+                        >
+                            <span class="truncate">
+                                {move || current_month.get().format("%B %Y").to_string()}
                             </span>
-                        </Show>
-                        <Show when=move || latency_ms.get().is_some()>
-                            <span class="text-white/20">"|"</span>
-                            <span class="text-[#FF5500] font-semibold">
-                                "LATENCY: "{move || latency_ms.get().unwrap_or_default()}"ms"
+                            <span class="material-symbols-outlined text-[20px] text-action shrink-0">
+                                {move || if month_picker_open.get() { "expand_less" } else { "expand_more" } }
                             </span>
-                        </Show>
-                    </div>
-                </div>
-
-                <div class="bg-[#0D1117]/95 border border-[#2BE8C9]/30 rounded p-4 lg:p-5 shadow-2xl flex flex-col xl:flex-row items-stretch xl:items-center justify-between gap-4 mb-6 backdrop-blur-xl relative cyan-glow-subtle">
-                    <div class="absolute -top-[3px] -left-[3px] w-2.5 h-2.5 border-t-2 border-l-2 border-[#2BE8C9] pointer-events-none"></div>
-                    <div class="absolute -top-[3px] -right-[3px] w-2.5 h-2.5 border-t-2 border-r-2 border-[#2BE8C9] pointer-events-none"></div>
-                    <div class="absolute -bottom-[3px] -left-[3px] w-2.5 h-2.5 border-b-2 border-l-2 border-[#FF5500] pointer-events-none"></div>
-                    <div class="absolute -bottom-[3px] -right-[3px] w-2.5 h-2.5 border-b-2 border-r-2 border-[#FF5500] pointer-events-none"></div>
-
-                    <div class="flex items-center gap-3">
-                        <div class="flex items-center bg-[#050508] border border-[#2BE8C9]/30 rounded p-1 shadow-inner">
+                        </button>
+                        <div class="flex items-center shrink-0">
                             <button
-                                class="w-8 h-8 rounded flex items-center justify-center text-[#8B949E] hover:text-[#2BE8C9] hover:bg-[#131722] transition-all"
+                                type="button"
+                                class="h-11 px-3 text-caption font-semibold text-action"
+                                on:click=move |_| current_month.set(NaiveDate::from_ymd_opt(today.year(), today.month(), 1).unwrap())
+                            >
+                                "Today"
+                            </button>
+                            // 44px squares: the spec's circular control size,
+                            // and the platform's minimum comfortable target.
+                            <button
+                                type="button"
+                                class="w-11 h-11 flex items-center justify-center rounded-full text-action"
+                                aria-label="Previous month"
                                 on:click=move |_| current_month.update(|d| *d = shift_month(*d, -1))
                             >
-                                <span class="material-symbols-outlined text-[18px]">"chevron_left"</span>
+                                <span class="material-symbols-outlined text-[22px]">"chevron_left"</span>
                             </button>
-                            <div class="px-3 flex items-center gap-2">
-                                <span class="material-symbols-outlined text-[#2BE8C9] text-[17px]">"calendar_month"</span>
-                                <span class="font-mono font-bold tracking-widest text-[#e6edf3] uppercase text-xs">
-                                    {move || current_month.get().format("%B %Y").to_string()}
-                                </span>
-                            </div>
                             <button
-                                class="w-8 h-8 rounded flex items-center justify-center text-[#8B949E] hover:text-[#2BE8C9] hover:bg-[#131722] transition-all"
+                                type="button"
+                                class="w-11 h-11 flex items-center justify-center rounded-full text-action"
+                                aria-label="Next month"
                                 on:click=move |_| current_month.update(|d| *d = shift_month(*d, 1))
                             >
-                                <span class="material-symbols-outlined text-[18px]">"chevron_right"</span>
+                                <span class="material-symbols-outlined text-[22px]">"chevron_right"</span>
                             </button>
                         </div>
-                        <button
-                            class="hidden sm:inline-flex px-3 py-1.5 rounded bg-[#131722] border border-[#2BE8C9]/30 hover:border-[#2BE8C9] text-[#2BE8C9] font-mono text-xs font-semibold tracking-wider transition-all"
-                            on:click=move |_| current_month.set(NaiveDate::from_ymd_opt(today.year(), today.month(), 1).unwrap())
-                        >
-                            "[ TODAY ]"
-                        </button>
-                        <Show when=move || loading.get()>
-                            <span class="text-[#8B949E] font-mono text-xs">"SYNCING..."</span>
-                        </Show>
                     </div>
 
-                    <div class="flex items-center self-start xl:self-center bg-[#050508] border border-[#2BE8C9]/20 p-1 rounded font-mono text-xs">
-                        <button class="px-3 py-1.5 rounded bg-[#131722] text-[#2BE8C9] font-bold border border-[#2BE8C9]/40 shadow-[0_0_8px_rgba(43,232,201,0.25)] transition-all">
-                            "[ MONTH ]"
-                        </button>
-                        <button
-                            class="px-3 py-1.5 rounded text-[#8B949E] opacity-40 cursor-not-allowed"
-                            disabled
-                            title="Week view not implemented yet"
-                        >
-                            "[ WEEK ]"
-                        </button>
-                        <button
-                            class="px-3 py-1.5 rounded text-[#8B949E] opacity-40 cursor-not-allowed"
-                            disabled
-                            title="Timeline view not implemented yet"
-                        >
-                            "[ TIMELINE ]"
-                        </button>
-                    </div>
+                    // Two native <select>s rather than a bespoke wheel: iOS
+                    // renders them as the system picker, which is the control
+                    // the user already knows, and it costs no custom UI.
+                    <Show when=move || month_picker_open.get()>
+                        <div class="flex items-center gap-2">
+                            <select
+                                class=SELECT
+                                aria-label="Month"
+                                prop:value=move || current_month.get().month().to_string()
+                                on:change=move |ev| {
+                                    if let Ok(m) = event_target_value(&ev).parse::<u32>() {
+                                        current_month
+                                            .update(|d| {
+                                                if let Some(next) = NaiveDate::from_ymd_opt(d.year(), m, 1) {
+                                                    *d = next;
+                                                }
+                                            });
+                                    }
+                                }
+                            >
+                                {(1..=12u32)
+                                    .map(|m| {
+                                        let label = NaiveDate::from_ymd_opt(2000, m, 1)
+                                            .unwrap()
+                                            .format("%B")
+                                            .to_string();
+                                        view! { <option value=m.to_string()>{label}</option> }
+                                    })
+                                    .collect_view()}
+                            </select>
+                            <select
+                                class=SELECT
+                                aria-label="Year"
+                                prop:value=move || current_month.get().year().to_string()
+                                on:change=move |ev| {
+                                    if let Ok(y) = event_target_value(&ev).parse::<i32>() {
+                                        current_month
+                                            .update(|d| {
+                                                if let Some(next) = NaiveDate::from_ymd_opt(y, d.month(), 1) {
+                                                    *d = next;
+                                                }
+                                            });
+                                    }
+                                }
+                            >
+                                // Ten years either side of today. The chevrons
+                                // cover anything beyond that, and a longer list
+                                // makes the wheel worse to spin.
+                                {((today.year() - 10)..=(today.year() + 10))
+                                    .map(|y| view! { <option value=y.to_string()>{y.to_string()}</option> })
+                                    .collect_view()}
+                            </select>
+                        </div>
+                    </Show>
 
+                    // `button-primary`: Action Blue, full pill, body text. The
+                    // press-scale is global in lib.rs so it cannot be left off.
                     <button
-                        class="ml-auto xl:ml-2 flex items-center gap-2 px-4 py-2 rounded bg-[#FF5500] hover:bg-[#FF6B00] text-[#050508] font-mono font-bold text-xs uppercase tracking-widest orange-glow-btn transition-all active:translate-y-0.5 cursor-pointer"
-                        on:click=move |_| select_day(selected_day.get_untracked().unwrap_or(today))
+                        type="button"
+                        class="w-full h-12 rounded-full bg-action text-canvas text-body flex items-center justify-center gap-2"
+                        on:click=open_new_event
                     >
-                        <span class="material-symbols-outlined text-[17px]">"bolt"</span>
-                        "+ ADD EVENT"
+                        <span class="material-symbols-outlined text-[20px]">"add"</span>
+                        "Add event"
                     </button>
                 </div>
 
-                <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-                    <div class="lg:col-span-8 xl:col-span-9 flex flex-col gap-4">
-                        <div class="grid grid-cols-7 gap-2 px-2 text-center font-mono text-xs">
-                            {["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]
-                                .iter()
-                                .enumerate()
-                                .map(|(i, d)| {
-                                    let is_weekend = i >= 5;
-                                    view! {
-                                        <div
-                                            class="tracking-widest py-1"
-                                            class=("text-[#FF5500]", is_weekend)
-                                            class=("font-semibold", is_weekend)
-                                            class=("text-[#8B949E]", !is_weekend)
-                                        >
-                                            {*d}
-                                        </div>
-                                    }
-                                })
-                                .collect_view()}
-                        </div>
+                <div class="flex flex-col gap-2">
+                    // Uniform, weekends included. The old grid coloured Saturday
+                    // and Sunday orange; a second accent is not available, and
+                    // iOS Calendar does not distinguish them either.
+                    <div class="grid grid-cols-7 gap-1 px-1">
+                        {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+                            .iter()
+                            .map(|d| {
+                                view! {
+                                    <div class="text-fine text-ink-48 text-center py-1">{*d}</div>
+                                }
+                            })
+                            .collect_view()}
+                    </div>
 
-                        <div class="grid grid-cols-7 gap-2 bg-[#0D1117] border border-[#2BE8C9]/30 p-2.5 rounded shadow-2xl">
+                    <div class="bg-canvas border border-hairline rounded-lg p-2">
+                        <div class="grid grid-cols-7 gap-1">
                             {move || {
                                 grid_cells(current_month.get())
                                     .into_iter()
                                     .map(|(day, in_month)| {
                                         let is_today = day == today;
-                                        let is_weekend = matches!(day.weekday(), Weekday::Sat | Weekday::Sun);
                                         let is_selected = move || selected_day.get() == Some(day);
                                         let day_events = events_on(day);
-                                        let overflow = day_events.len().saturating_sub(3);
-                                        let count_label = slot_label(day_events.len());
                                         view! {
-                                            <div
-                                                class="min-h-[110px] xl:min-h-[125px] p-2 rounded flex flex-col justify-between cursor-pointer transition-all font-mono"
-                                                class=("opacity-35", move || !in_month)
-                                                class=("bg-[#131722]", move || is_today)
-                                                class=("bg-[#050508]", move || !is_today)
-                                                class=("border-2", move || is_today || is_selected())
-                                                class=("border", move || !(is_today || is_selected()))
-                                                class=("border-[#2BE8C9]", move || is_today || is_selected())
-                                                class=("shadow-[0_0_16px_rgba(43,232,201,0.3)]", move || is_today || is_selected())
-                                                class=("border-[#2BE8C9]/20", move || !(is_today || is_selected()))
-                                                class=("hover:border-[#2BE8C9]/50", move || !(is_today || is_selected()))
+                                            // A real <button>: keyboard
+                                            // reachable and it announces
+                                            // itself.
+                                            <button
+                                                type="button"
+                                                class="aspect-square rounded-sm flex flex-col items-center justify-center gap-1"
+                                                class=("opacity-40", move || !in_month)
                                                 on:click=move |_| select_day(day)
                                             >
-                                                <div class="flex items-center justify-between">
-                                                    <span
-                                                        class="text-xs"
-                                                        class=("text-[#00F5FF]", move || is_today)
-                                                        class=("font-bold", move || is_today)
-                                                        class=("flex", move || is_today)
-                                                        class=("items-center", move || is_today)
-                                                        class=("gap-1.5", move || is_today)
-                                                        class=("text-[#FF6B00]", move || !is_today && is_weekend)
-                                                        class=("text-[#e6edf3]", move || !is_today && !is_weekend)
-                                                    >
-                                                        {day.day()}
-                                                    </span>
-                                                    <Show when=move || is_today>
-                                                        <span class="text-[9px] px-1 py-0.5 rounded bg-[#2BE8C9] text-[#050508] uppercase font-bold tracking-tight">"NOW"</span>
-                                                    </Show>
-                                                </div>
-                                                <div class="flex flex-col gap-1 my-1">
+                                                // Selection gets the filled
+                                                // disc, today only blue text.
+                                                // Reversed once and the
+                                                // selection lost: two filled
+                                                // discs competed and the one
+                                                // marking a fact beat the one
+                                                // marking the user's own tap.
+                                                // 36px in a ~53px cell.
+                                                <span
+                                                    class="w-9 h-9 flex items-center justify-center rounded-full text-caption"
+                                                    class=("bg-action", move || is_selected())
+                                                    class=("text-canvas", move || is_selected())
+                                                    class=("font-semibold", move || is_selected() || is_today)
+                                                    class=("text-action", move || is_today && !is_selected())
+                                                    class=("text-ink", move || !is_today && !is_selected())
+                                                >
+                                                    {day.day()}
+                                                </span>
+                                                // Fixed height whether or not
+                                                // there are dots, so the date
+                                                // row does not shift between
+                                                // busy and empty days.
+                                                <span class="flex items-center gap-0.5 h-1.5">
                                                     {day_events
                                                         .iter()
                                                         .take(3)
                                                         .map(|e| {
                                                             let dot = calendar_color(&e.calendar_url);
                                                             view! {
-                                                                <div class="px-1.5 py-0.5 rounded bg-[#131722] text-[#e6edf3] text-[11px] truncate flex items-center gap-1">
-                                                                    <span class="w-1.5 h-1.5 rounded-full shrink-0" style:background-color=dot></span>
-                                                                    <span>{e.summary.clone()}</span>
-                                                                </div>
+                                                                <span
+                                                                    class="w-1.5 h-1.5 rounded-full"
+                                                                    style:background-color=dot
+                                                                ></span>
                                                             }
                                                         })
                                                         .collect_view()}
-                                                    <Show when=move || { overflow > 0 }>
-                                                        <div class="text-[9px] text-[#8B949E]">{format!("+{overflow} more")}</div>
-                                                    </Show>
-                                                </div>
-                                                <div class="text-[9px] text-[#8B949E] text-right">{count_label}</div>
-                                            </div>
+                                                </span>
+                                            </button>
                                         }
                                     })
                                     .collect_view()
@@ -625,303 +765,371 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                         </div>
                     </div>
 
-                    <div class="lg:col-span-4 xl:col-span-3 flex flex-col gap-5">
-                        <div class="bg-[#0D1117] border border-[#2BE8C9]/30 rounded p-4 shadow-2xl flex flex-col gap-3">
-                            <span class="font-mono text-[10px] text-[#2BE8C9] tracking-widest uppercase font-semibold">"CALENDARS"</span>
-                            <div class="flex flex-col gap-2 font-mono text-xs">
-                                <For
-                                    each=move || calendars.get()
-                                    key=|c| c.url.clone()
-                                    children=move |cal: CalendarSummary| {
-                                        let url_for_toggle = cal.url.clone();
-                                        let url_for_visible = cal.url.clone();
-                                        let url_for_color_get = cal.url.clone();
-                                        let url_for_color_set = cal.url.clone();
-                                        view! {
-                                            <label class="flex items-center gap-2 cursor-pointer group">
-                                                <input
-                                                    type="checkbox"
-                                                    class="accent-[#2BE8C9]"
-                                                    prop:checked=move || !hidden_calendars.get().contains(&url_for_visible)
-                                                    on:change=move |_| toggle_calendar_visible(url_for_toggle.clone())
-                                                />
-                                                <input
-                                                    type="color"
-                                                    class="w-5 h-5 rounded border-none bg-transparent cursor-pointer"
-                                                    prop:value=move || calendar_color(&url_for_color_get)
-                                                    on:input=move |ev| set_calendar_color(url_for_color_set.clone(), event_target_value(&ev))
-                                                />
-                                                <span class="text-[#e6edf3] truncate group-hover:text-[#2BE8C9] transition-colors">
-                                                    {cal.display_name.clone()}
-                                                </span>
-                                            </label>
-                                        }
-                                    }
-                                />
-                            </div>
+                    // Kept because it answers "am I looking at stale data".
+                    // The latency readout that used to sit beside it answered
+                    // nothing a calendar user can act on.
+                    <Show when=move || last_synced.get().is_some() || loading.get()>
+                      <div class="flex items-center justify-center gap-1">
+                        // Same indicator as the buttons use, so "working" looks
+                        // the same wherever it happens.
+                        <Show when=move || loading.get()>
+                            <crate::ui::Spinner class="text-fine text-ink-48 mr-1"/>
+                        </Show>
+                        <p class="text-fine text-ink-48">
+                            {move || {
+                                if loading.get() {
+                                    "Updating…".to_string()
+                                } else {
+                                    last_synced
+                                        .get()
+                                        .map(|t| format!("Updated {}", t.format("%H:%M")))
+                                        .unwrap_or_default()
+                                }
+                            }}
+                        </p>
+                        // Sits with the staleness it answers rather than in the
+                        // top bar: asking "is this current" and fixing it are
+                        // the same thought. Skips the focus floor -- an
+                        // explicit tap is not an incidental tab switch.
+                        <button
+                            type="button"
+                            class="h-11 px-2 flex items-center text-fine font-semibold text-action disabled:text-ink-48"
+                            disabled=move || loading.get()
+                            on:click=move |_| refresh_events()
+                        >
+                            "Refresh"
+                        </button>
+                      </div>
+                    </Show>
+                </div>
+
+                <div class="bg-canvas border border-hairline rounded-lg p-4 flex flex-col gap-2">
+                    <span class="text-caption font-semibold text-ink">"Calendars"</span>
+                    <For
+                        each=move || calendars.get()
+                        key=|c| c.url.clone()
+                        children=move |cal: CalendarSummary| {
+                            let url_for_toggle = cal.url.clone();
+                            let url_for_visible = cal.url.clone();
+                            let url_for_color_get = cal.url.clone();
+                            let url_for_color_set = cal.url.clone();
+                            view! {
+                                <label class="flex items-center gap-3 min-h-11 cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        class="w-5 h-5 accent-action shrink-0"
+                                        prop:checked=move || !hidden_calendars.get().contains(&url_for_visible)
+                                        on:change=move |_| toggle_calendar_visible(url_for_toggle.clone())
+                                    />
+                                    <input
+                                        type="color"
+                                        class="w-7 h-7 rounded-full border-none bg-transparent cursor-pointer shrink-0"
+                                        prop:value=move || calendar_color(&url_for_color_get)
+                                        on:input=move |ev| set_calendar_color(url_for_color_set.clone(), event_target_value(&ev))
+                                    />
+                                    <span class="text-body text-ink truncate">
+                                        {cal.display_name.clone()}
+                                    </span>
+                                </label>
+                            }
+                        }
+                    />
+                </div>
+
+                <div class="bg-canvas border border-hairline rounded-lg overflow-hidden">
+                    <Show
+                        when=move || selected_day.get().is_some()
+                        fallback=|| view! {
+                            <p class="text-body text-ink-80 p-6">
+                                "Pick a day to see what is on it."
+                            </p>
+                        }
+                    >
+                        <div class="px-4 py-3 border-b border-divider-soft flex flex-col gap-0.5">
+                            <span class="text-body font-semibold text-ink">
+                                {move || selected_day.get().map(|d| d.format("%A %-d %B").to_string()).unwrap_or_default()}
+                            </span>
+                            <span class="text-caption text-ink-48">
+                                {move || slot_label(selected_day.get().map(events_on).unwrap_or_default().len())}
+                            </span>
                         </div>
 
-                        <div class="bg-[#0D1117] border border-[#2BE8C9]/35 rounded p-5 shadow-2xl flex flex-col gap-4 relative cyan-glow-subtle">
-                            <div class="absolute -top-1 -left-1 w-3 h-3 border-t-2 border-l-2 border-[#2BE8C9]"></div>
-                            <div class="absolute -top-1 -right-1 w-3 h-3 border-t-2 border-r-2 border-[#2BE8C9]"></div>
-                            <div class="absolute -bottom-1 -left-1 w-3 h-3 border-b-2 border-l-2 border-[#FF5500]"></div>
-                            <div class="absolute -bottom-1 -right-1 w-3 h-3 border-b-2 border-r-2 border-[#FF5500]"></div>
-
-                            <Show
-                                when=move || selected_day.get().is_some()
-                                fallback=|| view! {
-                                    <p class="text-[#8B949E] font-mono text-xs">"Click a day on the grid to view or add events."</p>
-                                }
-                            >
-                                <div class="flex items-center justify-between pb-3 bg-[#050508] border-b border-[#2BE8C9]/20 -mx-5 -mt-5 p-4 rounded-t">
-                                    <div class="flex flex-col">
-                                        <span class="font-mono text-[10px] text-[#2BE8C9] tracking-widest uppercase font-semibold">"DAY INSPECTOR"</span>
-                                        <span class="font-mono text-xs text-[#e6edf3] font-bold tracking-wider">
-                                            {move || selected_day.get().map(|d| d.format("%B %-d, %Y").to_string()).unwrap_or_default()}
-                                        </span>
-                                    </div>
-                                    <span class="px-2 py-0.5 rounded bg-[#2BE8C9]/15 border border-[#2BE8C9]/40 text-[#2BE8C9] font-mono text-[11px] font-bold">
-                                        {move || selected_day.get().map(events_on).unwrap_or_default().len()}" EVENTS"
-                                    </span>
-                                </div>
-
-                                <div class="flex flex-col gap-3 font-mono">
-                                    <For
-                                        each=move || selected_day.get().map(events_on).unwrap_or_default()
-                                        key=|e| e.uid.clone()
-                                        children=move |event: EventSummary| {
-                                            let event_for_edit = event.clone();
-                                            let event_for_delete = event.clone();
-                                            let dot = calendar_color(&event.calendar_url);
-                                            view! {
-                                                <div class="p-3 rounded bg-[#050508] border border-[#2BE8C9]/20 hover:border-[#2BE8C9]/40 transition-all flex flex-col gap-1.5 group">
-                                                    <div class="flex items-center justify-between">
-                                                        <span class="px-2 py-0.5 rounded bg-[#131722] text-[#e6edf3] text-[10px] font-bold">
-                                                            {event.start.clone()}" - "{event.end.clone()}
-                                                        </span>
-                                                        <span class="flex items-center gap-1">
-                                                            <button
-                                                                class="w-6 h-6 flex items-center justify-center text-[#8B949E] hover:text-[#2BE8C9] transition-colors"
-                                                                on:click=move |_| start_edit(event_for_edit.clone())
-                                                            >
-                                                                <span class="material-symbols-outlined text-[14px]">"edit"</span>
-                                                            </button>
-                                                            <button
-                                                                class="w-6 h-6 flex items-center justify-center text-[#8B949E] hover:text-[#FF5500] transition-colors"
-                                                                on:click=move |_| remove_event(event_for_delete.clone())
-                                                            >
-                                                                <span class="material-symbols-outlined text-[14px]">"delete"</span>
-                                                            </button>
-                                                        </span>
-                                                    </div>
-                                                    <div class="text-xs text-[#e6edf3] font-bold group-hover:text-[#2BE8C9] transition-colors flex items-center gap-1.5">
-                                                        <span class="w-1.5 h-1.5 rounded-full shrink-0" style:background-color=dot></span>
-                                                        <span>{event.summary.clone()}</span>
-                                                    </div>
-                                                    <Show when={
-                                                        let d = event.description.clone();
-                                                        move || !d.is_empty()
-                                                    }>
-                                                        <div class="text-[#8B949E] text-[11px]">{event.description.clone()}</div>
-                                                    </Show>
-                                                </div>
-                                            }
-                                        }
-                                    />
-                                </div>
-
-                                <div class="mt-2 pt-4 bg-[#050508] border-t border-[#2BE8C9]/20 -mx-5 -mb-5 p-4 rounded-b flex flex-col gap-3 font-mono">
-                                    <div class="flex items-center justify-between">
-                                        <span class="text-xs text-[#2BE8C9] font-bold tracking-wide flex items-center gap-1.5 uppercase">
-                                            <span class="material-symbols-outlined text-[16px]">"bolt"</span>
-                                            {move || if editing_event.get().is_some() { "EDIT EVENT" } else { "+ QUICK SCHEDULE" }}
-                                        </span>
-                                        <button
-                                            type="button"
-                                            class="flex items-center gap-1 px-2 py-1 rounded border border-[#2BE8C9]/25 text-[#8B949E] hover:text-[#2BE8C9] hover:border-[#2BE8C9]/60 font-mono text-[10px] uppercase tracking-wider transition-colors cursor-pointer"
-                                            title="Fill with random test data"
-                                            on:click=move |_| random_fill(form)
-                                        >
-                                            <span class="material-symbols-outlined text-[13px]">"casino"</span>
-                                            "RANDOM"
-                                        </button>
-                                    </div>
-                                    <form on:submit=submit_event class="flex flex-col gap-2">
-                                        <select
-                                            class="bg-[#131722] border border-[#2BE8C9]/30 text-[#e6edf3] text-xs px-3 py-1.5 rounded focus:outline-none focus:border-[#2BE8C9] transition-all"
-                                            prop:value=move || form.calendar_url.get()
-                                            on:change=move |ev| form.calendar_url.set(event_target_value(&ev))
-                                        >
-                                            {move || calendars.get().into_iter().map(|c| view! {
-                                                <option value=c.url.clone()>{c.display_name.clone()}</option>
-                                            }).collect_view()}
-                                        </select>
-                                        <input
-                                            class="w-full bg-[#131722] border border-[#2BE8C9]/30 text-[#e6edf3] placeholder:text-[#8B949E] text-xs px-3 py-2 rounded focus:outline-none focus:border-[#2BE8C9] transition-all"
-                                            type="text"
-                                            placeholder="Event title"
-                                            prop:value=move || form.summary.get()
-                                            on:input=move |ev| form.summary.set(event_target_value(&ev))
-                                            required
-                                        />
-                                        <textarea
-                                            class="w-full bg-[#131722] border border-[#2BE8C9]/30 text-[#e6edf3] placeholder:text-[#8B949E] text-xs px-3 py-2 rounded focus:outline-none focus:border-[#2BE8C9] transition-all resize-none"
-                                            rows="2"
-                                            placeholder="Description"
-                                            prop:value=move || form.description.get()
-                                            on:input=move |ev| form.description.set(event_target_value(&ev))
-                                        ></textarea>
-                                        <label class="flex items-center gap-2 cursor-pointer font-mono text-xs text-[#e6edf3]">
-                                            <input
-                                                type="checkbox"
-                                                class="accent-[#2BE8C9]"
-                                                prop:checked=move || form.all_day.get()
-                                                on:change=move |_| form.toggle_all_day()
-                                            />
-                                            <span>"All day"</span>
-                                        </label>
-                                        <div class="grid grid-cols-2 gap-2">
-                                            <input
-                                                class="bg-[#131722] border border-[#2BE8C9]/30 text-[#2BE8C9] text-xs px-3 py-1.5 rounded focus:outline-none focus:border-[#2BE8C9] transition-all"
-                                                type=move || if form.all_day.get() { "date" } else { "datetime-local" }
-                                                prop:value=move || form.start.get()
-                                                on:input=move |ev| form.start.set(event_target_value(&ev))
-                                                required
-                                            />
-                                            <input
-                                                class="bg-[#131722] border border-[#2BE8C9]/30 text-[#2BE8C9] text-xs px-3 py-1.5 rounded focus:outline-none focus:border-[#2BE8C9] transition-all"
-                                                type=move || if form.all_day.get() { "date" } else { "datetime-local" }
-                                                prop:value=move || form.end.get()
-                                                on:input=move |ev| form.end.set(event_target_value(&ev))
-                                                required
-                                            />
-                                        </div>
-                                        <input
-                                            class="w-full bg-[#131722] border border-[#2BE8C9]/30 text-[#e6edf3] placeholder:text-[#8B949E] text-xs px-3 py-2 rounded focus:outline-none focus:border-[#2BE8C9] transition-all"
-                                            type="text"
-                                            placeholder="Location"
-                                            prop:value=move || form.location.get()
-                                            on:input=move |ev| form.location.set(event_target_value(&ev))
-                                        />
-                                        <div class="grid grid-cols-2 gap-2">
-                                            <select
-                                                class="bg-[#131722] border border-[#2BE8C9]/30 text-[#e6edf3] text-xs px-3 py-1.5 rounded focus:outline-none focus:border-[#2BE8C9] transition-all"
-                                                prop:value=move || form.priority.get()
-                                                on:change=move |ev| form.priority.set(event_target_value(&ev))
-                                            >
-                                                <option value="">"Priority: Not set"</option>
-                                                <option value="1">"High"</option>
-                                                <option value="5">"Medium"</option>
-                                                <option value="9">"Low"</option>
-                                            </select>
-                                            <select
-                                                class="bg-[#131722] border border-[#2BE8C9]/30 text-[#e6edf3] text-xs px-3 py-1.5 rounded focus:outline-none focus:border-[#2BE8C9] transition-all"
-                                                prop:value=move || form.busy.get()
-                                                on:change=move |ev| form.busy.set(event_target_value(&ev))
-                                            >
-                                                <option value="">"Status: Not set"</option>
-                                                <option value="busy">"Busy"</option>
-                                                <option value="free">"Free"</option>
-                                            </select>
-                                        </div>
-                                        <div class="flex flex-col gap-1.5">
-                                            <select
-                                                class="bg-[#131722] border border-[#2BE8C9]/30 text-[#e6edf3] text-xs px-3 py-1.5 rounded focus:outline-none focus:border-[#2BE8C9] transition-all"
-                                                prop:value=move || form.reminder_preset.get()
-                                                on:change=move |ev| form.reminder_preset.set(event_target_value(&ev))
-                                            >
-                                                <option value="none">"Reminder: None"</option>
-                                                <option value="5">"5 minutes before"</option>
-                                                <option value="15">"15 minutes before"</option>
-                                                <option value="30">"30 minutes before"</option>
-                                                <option value="60">"1 hour before"</option>
-                                                <option value="1440">"1 day before"</option>
-                                                <option value="2880">"2 days before"</option>
-                                                <option value="10080">"1 week before"</option>
-                                                <option value="custom">"Custom..."</option>
-                                            </select>
-                                            <Show when=move || form.reminder_preset.get() == "custom">
-                                                <div class="grid grid-cols-2 gap-2">
-                                                    <input
-                                                        class="bg-[#131722] border border-[#2BE8C9]/30 text-[#e6edf3] text-xs px-3 py-1.5 rounded focus:outline-none focus:border-[#2BE8C9] transition-all"
-                                                        type="number"
-                                                        min="0"
-                                                        placeholder="Value"
-                                                        prop:value=move || form.reminder_value.get()
-                                                        on:input=move |ev| form.reminder_value.set(event_target_value(&ev))
-                                                    />
-                                                    <select
-                                                        class="bg-[#131722] border border-[#2BE8C9]/30 text-[#e6edf3] text-xs px-3 py-1.5 rounded focus:outline-none focus:border-[#2BE8C9] transition-all"
-                                                        prop:value=move || form.reminder_unit.get()
-                                                        on:change=move |ev| form.reminder_unit.set(event_target_value(&ev))
-                                                    >
-                                                        <option value="minutes">"minutes"</option>
-                                                        <option value="hours">"hours"</option>
-                                                        <option value="days">"days"</option>
-                                                    </select>
-                                                </div>
-                                            </Show>
-                                        </div>
-                                        <div class="flex flex-col gap-1.5">
-                                            <select
-                                                class="bg-[#131722] border border-[#2BE8C9]/30 text-[#e6edf3] text-xs px-3 py-1.5 rounded focus:outline-none focus:border-[#2BE8C9] transition-all"
-                                                prop:value=move || form.travel_preset.get()
-                                                on:change=move |ev| form.travel_preset.set(event_target_value(&ev))
-                                            >
-                                                <option value="none">"Travel time: None"</option>
-                                                <option value="0">"0 minutes"</option>
-                                                <option value="15">"15 minutes"</option>
-                                                <option value="30">"30 minutes"</option>
-                                                <option value="45">"45 minutes"</option>
-                                                <option value="60">"1 hour"</option>
-                                                <option value="90">"1.5 hours"</option>
-                                                <option value="custom">"Custom..."</option>
-                                            </select>
-                                            <Show when=move || form.travel_preset.get() == "custom">
-                                                <div class="grid grid-cols-2 gap-2">
-                                                    <input
-                                                        class="bg-[#131722] border border-[#2BE8C9]/30 text-[#e6edf3] text-xs px-3 py-1.5 rounded focus:outline-none focus:border-[#2BE8C9] transition-all"
-                                                        type="number"
-                                                        min="0"
-                                                        placeholder="Value"
-                                                        prop:value=move || form.travel_value.get()
-                                                        on:input=move |ev| form.travel_value.set(event_target_value(&ev))
-                                                    />
-                                                    <select
-                                                        class="bg-[#131722] border border-[#2BE8C9]/30 text-[#e6edf3] text-xs px-3 py-1.5 rounded focus:outline-none focus:border-[#2BE8C9] transition-all"
-                                                        prop:value=move || form.travel_unit.get()
-                                                        on:change=move |ev| form.travel_unit.set(event_target_value(&ev))
-                                                    >
-                                                        <option value="minutes">"minutes"</option>
-                                                        <option value="hours">"hours"</option>
-                                                        <option value="days">"days"</option>
-                                                    </select>
-                                                </div>
-                                            </Show>
-                                        </div>
-                                        <div class="flex items-center gap-2">
-                                            <button
-                                                type="submit"
-                                                class="flex-1 py-2.5 rounded bg-[#131722] border border-[#2BE8C9]/50 hover:bg-[#2BE8C9] hover:text-[#050508] text-[#2BE8C9] font-mono text-xs font-bold tracking-wider transition-all shadow-sm active:translate-y-0.5 flex items-center justify-center gap-1.5 cursor-pointer"
-                                            >
-                                                <span class="material-symbols-outlined text-[16px]">"add_circle"</span>
-                                                {move || if editing_event.get().is_some() { "SAVE" } else { "COMMIT TO CALDAV" }}
-                                            </button>
-                                            <Show when=move || editing_event.get().is_some()>
+                        <div class="flex flex-col gap-2 p-4">
+                            <For
+                                each=move || selected_day.get().map(events_on).unwrap_or_default()
+                                key=|e| e.uid.clone()
+                                children=move |event: EventSummary| {
+                                    let event_for_edit = event.clone();
+                                    let event_for_delete = event.clone();
+                                    let dot = calendar_color(&event.calendar_url);
+                                    view! {
+                                        <div class="rounded-lg border border-hairline p-3 flex items-start justify-between gap-2">
+                                            <div class="flex flex-col gap-1 min-w-0 flex-1">
+                                                <span class="text-caption text-ink-48">
+                                                    {event.start.clone()}" – "{event.end.clone()}
+                                                </span>
+                                                <span class="flex items-center gap-2 min-w-0">
+                                                    <span
+                                                        class="w-2 h-2 rounded-full shrink-0"
+                                                        style:background-color=dot
+                                                    ></span>
+                                                    <span class="text-body font-semibold text-ink truncate">
+                                                        {event.summary.clone()}
+                                                    </span>
+                                                </span>
+                                                <Show when={
+                                                    let d = event.description.clone();
+                                                    move || !d.is_empty()
+                                                }>
+                                                    <span class="text-caption text-ink-80">
+                                                        {event.description.clone()}
+                                                    </span>
+                                                </Show>
+                                            </div>
+                                            <div class="flex items-center shrink-0">
                                                 <button
                                                     type="button"
-                                                    class="px-3 py-2.5 rounded border border-[#2BE8C9]/20 text-[#8B949E] hover:text-[#e6edf3] font-mono text-xs uppercase tracking-wider transition-colors"
-                                                    on:click=cancel_edit
+                                                    class="w-11 h-11 flex items-center justify-center rounded-full text-action"
+                                                    aria-label="Edit event"
+                                                    on:click=move |_| start_edit(event_for_edit.clone())
                                                 >
-                                                    "CANCEL"
+                                                    <span class="material-symbols-outlined text-[18px]">"edit"</span>
                                                 </button>
-                                            </Show>
+                                                // Destructive, but it does not
+                                                // get a red: the system has one
+                                                // accent, and the glyph already
+                                                // carries the intent.
+                                                <PendingIconButton
+                                                    // Narrowed to this row: one
+                                                    // action serves the whole
+                                                    // list, so without the input
+                                                    // comparison every row would
+                                                    // spin on one tap.
+                                                    pending=Signal::derive({
+                                                        let mine = event_for_delete.clone();
+                                                        move || removing.get()
+                                                            && remove_input.get().as_ref() == Some(&mine)
+                                                    })
+                                                    icon="delete"
+                                                    label="Delete event"
+                                                    class="w-11 h-11 flex items-center justify-center rounded-full text-ink-48"
+                                                    on_click=Callback::new({
+                                                        let mine = event_for_delete.clone();
+                                                        move |_| { remove.dispatch(mine.clone()); }
+                                                    })
+                                                />
+                                            </div>
                                         </div>
-                                    </form>
-                                </div>
-                            </Show>
+                                    }
+                                }
+                            />
                         </div>
-                    </div>
+
+                        <Show when=move || form_open.get()>
+                        <div class="px-4 pb-4 pt-2 border-t border-divider-soft flex flex-col gap-4">
+                            <div class="flex items-center justify-between gap-2">
+                                <span class="text-caption font-semibold text-ink">
+                                    {move || if editing_event.get().is_some() { "Edit event" } else { "New event" }}
+                                </span>
+                                <button
+                                    type="button"
+                                    class="h-11 px-2 flex items-center gap-1.5 text-caption text-ink-48"
+                                    title="Fill with random test data"
+                                    on:click=move |_| random_fill(form)
+                                >
+                                    <span class="material-symbols-outlined text-[16px]">"casino"</span>
+                                    "Random"
+                                </button>
+                            </div>
+
+                            <form on:submit=submit_event class="flex flex-col gap-3">
+                                <select
+                                    class=SELECT
+                                    prop:value=move || form.calendar_url.get()
+                                    on:change=move |ev| form.calendar_url.set(event_target_value(&ev))
+                                >
+                                    {move || calendars.get().into_iter().map(|c| view! {
+                                        <option value=c.url.clone()>{c.display_name.clone()}</option>
+                                    }).collect_view()}
+                                </select>
+                                <input
+                                    class=FIELD
+                                    type="text"
+                                    placeholder="Title"
+                                    prop:value=move || form.summary.get()
+                                    on:input=move |ev| form.summary.set(event_target_value(&ev))
+                                    required
+                                />
+                                <textarea
+                                    class=FIELD_AREA
+                                    rows="2"
+                                    placeholder="Notes"
+                                    prop:value=move || form.description.get()
+                                    on:input=move |ev| form.description.set(event_target_value(&ev))
+                                ></textarea>
+                                <label class="flex items-center gap-3 min-h-11 cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        class="w-5 h-5 accent-action shrink-0"
+                                        prop:checked=move || form.all_day.get()
+                                        on:change=move |_| form.toggle_all_day()
+                                    />
+                                    <span class="text-body text-ink">"All day"</span>
+                                </label>
+                                // One per row rather than side by side: a datetime-local renders its
+                                // own date *and* time text, which clips at half of a 430px column.
+                                // Stacked they need labels -- two identical pills say nothing about
+                                // which is which.
+                                <label class="flex flex-col gap-1.5">
+                                    <span class="text-caption text-ink-48 px-1">"Starts"</span>
+                                    <input
+                                        class=FIELD
+                                        type=move || if form.all_day.get() { "date" } else { "datetime-local" }
+                                        prop:value=move || form.start.get()
+                                        on:input=move |ev| form.start.set(event_target_value(&ev))
+                                        required
+                                    />
+                                </label>
+                                <label class="flex flex-col gap-1.5">
+                                    <span class="text-caption text-ink-48 px-1">"Ends"</span>
+                                    <input
+                                        class=FIELD
+                                        type=move || if form.all_day.get() { "date" } else { "datetime-local" }
+                                        prop:value=move || form.end.get()
+                                        on:input=move |ev| form.end.set(event_target_value(&ev))
+                                        required
+                                    />
+                                </label>
+                                <input
+                                    class=FIELD
+                                    type="text"
+                                    placeholder="Location"
+                                    prop:value=move || form.location.get()
+                                    on:input=move |ev| form.location.set(event_target_value(&ev))
+                                />
+                                <div class="grid grid-cols-2 gap-2">
+                                    <select
+                                        class=SELECT
+                                        prop:value=move || form.priority.get()
+                                        on:change=move |ev| form.priority.set(event_target_value(&ev))
+                                    >
+                                        <option value="">"Priority"</option>
+                                        <option value="1">"High"</option>
+                                        <option value="5">"Medium"</option>
+                                        <option value="9">"Low"</option>
+                                    </select>
+                                    <select
+                                        class=SELECT
+                                        prop:value=move || form.busy.get()
+                                        on:change=move |ev| form.busy.set(event_target_value(&ev))
+                                    >
+                                        <option value="">"Status"</option>
+                                        <option value="busy">"Busy"</option>
+                                        <option value="free">"Free"</option>
+                                    </select>
+                                </div>
+                                <div class="flex flex-col gap-2">
+                                    <select
+                                        class=SELECT
+                                        prop:value=move || form.reminder_preset.get()
+                                        on:change=move |ev| form.reminder_preset.set(event_target_value(&ev))
+                                    >
+                                        <option value="none">"No reminder"</option>
+                                        <option value="5">"5 minutes before"</option>
+                                        <option value="15">"15 minutes before"</option>
+                                        <option value="30">"30 minutes before"</option>
+                                        <option value="60">"1 hour before"</option>
+                                        <option value="1440">"1 day before"</option>
+                                        <option value="2880">"2 days before"</option>
+                                        <option value="10080">"1 week before"</option>
+                                        <option value="custom">"Custom…"</option>
+                                    </select>
+                                    <Show when=move || form.reminder_preset.get() == "custom">
+                                        <div class="grid grid-cols-2 gap-2">
+                                            <input
+                                                class=FIELD
+                                                type="number"
+                                                min="0"
+                                                placeholder="Value"
+                                                prop:value=move || form.reminder_value.get()
+                                                on:input=move |ev| form.reminder_value.set(event_target_value(&ev))
+                                            />
+                                            <select
+                                                class=SELECT
+                                                prop:value=move || form.reminder_unit.get()
+                                                on:change=move |ev| form.reminder_unit.set(event_target_value(&ev))
+                                            >
+                                                <option value="minutes">"minutes"</option>
+                                                <option value="hours">"hours"</option>
+                                                <option value="days">"days"</option>
+                                            </select>
+                                        </div>
+                                    </Show>
+                                </div>
+                                <div class="flex flex-col gap-2">
+                                    <select
+                                        class=SELECT
+                                        prop:value=move || form.travel_preset.get()
+                                        on:change=move |ev| form.travel_preset.set(event_target_value(&ev))
+                                    >
+                                        <option value="none">"No travel time"</option>
+                                        <option value="0">"0 minutes"</option>
+                                        <option value="15">"15 minutes"</option>
+                                        <option value="30">"30 minutes"</option>
+                                        <option value="45">"45 minutes"</option>
+                                        <option value="60">"1 hour"</option>
+                                        <option value="90">"1.5 hours"</option>
+                                        <option value="custom">"Custom…"</option>
+                                    </select>
+                                    <Show when=move || form.travel_preset.get() == "custom">
+                                        <div class="grid grid-cols-2 gap-2">
+                                            <input
+                                                class=FIELD
+                                                type="number"
+                                                min="0"
+                                                placeholder="Value"
+                                                prop:value=move || form.travel_value.get()
+                                                on:input=move |ev| form.travel_value.set(event_target_value(&ev))
+                                            />
+                                            <select
+                                                class=SELECT
+                                                prop:value=move || form.travel_unit.get()
+                                                on:change=move |ev| form.travel_unit.set(event_target_value(&ev))
+                                            >
+                                                <option value="minutes">"minutes"</option>
+                                                <option value="hours">"hours"</option>
+                                                <option value="days">"days"</option>
+                                            </select>
+                                        </div>
+                                    </Show>
+                                </div>
+                                <div class="flex items-center gap-2 pt-1">
+                                    <PendingButton
+                                        submit=true
+                                        pending=saving
+                                        label=Signal::derive(move || {
+                                            if editing_event.get().is_some() { "Save" } else { "Add event" }.to_string()
+                                        })
+                                        busy="Saving…"
+                                        class="flex-1 h-12 rounded-full bg-action text-canvas text-body \
+                                               disabled:opacity-40 flex items-center justify-center gap-2"
+                                    />
+                                    <Show when=move || editing_event.get().is_some()>
+                                        // `button-secondary-pill`: the ghost
+                                        // half of the spec's two-CTA pairing.
+                                        <button
+                                            type="button"
+                                            class="h-12 px-5 rounded-full border border-action text-action text-body"
+                                            on:click=cancel_edit
+                                        >
+                                            "Cancel"
+                                        </button>
+                                    </Show>
+                                </div>
+                            </form>
+                        </div>
+                        </Show>
+                    </Show>
                 </div>
             </div>
         </main>

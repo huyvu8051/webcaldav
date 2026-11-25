@@ -1,7 +1,7 @@
 use crate::dav;
 use crate::storage::{self, ConnectionConfig};
+use crate::ui::PendingButton;
 use leptos::prelude::*;
-use leptos::task::spawn_local;
 use leptos_router::hooks::use_navigate;
 
 const PRESETS: &[(&str, &str)] = &[
@@ -11,7 +11,12 @@ const PRESETS: &[(&str, &str)] = &[
     ("Fastmail", "https://caldav.fastmail.com/dav/"),
 ];
 
-const INPUT_CLASSES: &str = "w-full bg-surface-inner border border-border-tech text-text-bright font-mono text-xs pl-10 pr-3 py-2.5 focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all placeholder:text-text-muted/40";
+/// `search-input` from DESIGN.md: pill, hairline, 17px, 44px tall.
+/// `action-focus` is the one sanctioned second blue, used only for focus.
+const INPUT_CLASSES: &str = "w-full h-11 bg-canvas border border-black/[0.08] rounded-full \
+    text-body text-ink placeholder:text-ink-48 pl-11 pr-4 \
+    focus:outline-none focus:border-action-focus focus:ring-1 focus:ring-action-focus \
+    transition-colors";
 
 #[component]
 pub fn ConnectRoutePage() -> impl IntoView {
@@ -21,7 +26,6 @@ pub fn ConnectRoutePage() -> impl IntoView {
     let username = RwSignal::new(String::new());
     let password = RwSignal::new(String::new());
     let password_visible = RwSignal::new(false);
-    let connecting = RwSignal::new(false);
     let status = RwSignal::new(String::new());
 
     #[cfg(feature = "hydrate")]
@@ -34,79 +38,73 @@ pub fn ConnectRoutePage() -> impl IntoView {
         });
     }
 
-    let do_connect = move || {
-        connecting.set(true);
-        status.set(String::new());
-        let config = ConnectionConfig {
-            server_url: server_url.get_untracked(),
-            username: username.get_untracked(),
-            password: password.get_untracked(),
-        };
+    // An Action rather than spawn_local plus a hand-managed bool. `.pending()`
+    // is derived from an in-flight counter, so it cannot be left stuck true by
+    // an early return -- which is exactly how this kind of flag goes wrong.
+    // `new_local` because the CalDAV futures are not Send.
+    let connect = Action::new_local({
         let navigate = navigate.clone();
-        spawn_local(async move {
-            match dav::list_calendars(&config).await {
-                Ok(_) => {
-                    storage::save(&config);
-                    navigate("/calendar", Default::default());
-                }
-                Err(e) => {
-                    status.set(format!("Connect failed: {e}"));
-                    connecting.set(false);
+        move |_: &()| {
+            let config = ConnectionConfig {
+                server_url: server_url.get_untracked(),
+                username: username.get_untracked(),
+                password: password.get_untracked(),
+            };
+            let navigate = navigate.clone();
+            async move {
+                status.set(String::new());
+                match dav::list_calendars(&config).await {
+                    Ok(_) => {
+                        storage::save(&config);
+                        navigate("/calendar", Default::default());
+                    }
+                    Err(e) => status.set(format!("Connect failed: {e}")),
                 }
             }
-        });
-    };
+        }
+    });
+    let connecting = connect.pending();
 
     view! {
-        <div class="pointer-events-none fixed inset-0 z-0 cad-grid-bg"></div>
-        <div class="pointer-events-none fixed inset-0 z-0 cad-grid-major"></div>
-        <div class="pointer-events-none fixed inset-0 z-0 bg-[radial-gradient(ellipse_at_50%_20%,rgba(43,232,201,0.07),transparent_70%)]"></div>
+        // No decorative background layers: DESIGN.md forbids gradients.
+        <main class="w-full flex-1 flex flex-col px-4 py-8">
+            <div class="max-w-app mx-auto w-full flex flex-col gap-6">
 
-        <header class="relative z-10 w-full border-b border-border-tech bg-[#050508]/85 backdrop-blur-md px-4 lg:px-8 py-2.5 flex items-center gap-2 text-xs tracking-wider">
-            <span class="inline-block w-2 h-2 bg-primary shadow-[0_0_8px_#2BE8C9]"></span>
-            <span class="font-bold text-primary tracking-widest font-mono text-sm">"WEBCALDAV // V1"</span>
-        </header>
-
-        <main class="relative z-10 w-full flex-1 flex flex-col items-center px-4 py-8">
-            <Show when=move || !status.get().is_empty()>
-                <div class="w-full max-w-[520px] mb-4 flex items-start gap-2.5 p-3 border border-accent-orange bg-accent-orange/10 text-text-bright font-mono text-xs">
-                    <span class="material-symbols-outlined text-[18px] text-accent-orange mt-0.5">"error"</span>
-                    <span>{move || status.get()}</span>
+                <div class="flex flex-col gap-2">
+                    <h1 class="text-title font-semibold text-ink">"Connect a calendar"</h1>
+                    <p class="text-body text-ink-80">
+                        "Sign in to your CalDAV server to see your calendars here."
+                    </p>
                 </div>
-            </Show>
 
-            <div class="w-full max-w-[520px] relative">
-                <div class="absolute -top-2.5 -left-2.5 w-4 h-4 border-t-2 border-l-2 border-primary pointer-events-none"></div>
-                <div class="absolute -top-2.5 -right-2.5 w-4 h-4 border-t-2 border-r-2 border-primary pointer-events-none"></div>
-                <div class="absolute -bottom-2.5 -left-2.5 w-4 h-4 border-b-2 border-l-2 border-primary pointer-events-none"></div>
-                <div class="absolute -bottom-2.5 -right-2.5 w-4 h-4 border-b-2 border-r-2 border-primary pointer-events-none"></div>
-
-                <div class="relative bg-surface-panel border border-border-tech shadow-[0_0_35px_rgba(0,0,0,0.85)] p-6 sm:p-7 flex flex-col gap-5">
-                    <div class="flex flex-col gap-2 border-b border-border-tech pb-4">
-                        <span class="text-[10px] tracking-widest font-mono text-primary font-semibold bg-primary/10 border border-primary/30 px-1.5 py-0.5 w-fit">
-                            "SYS_OK"
+                <Show when=move || !status.get().is_empty()>
+                    // One accent only, so an error reads through wording and
+                    // placement rather than colour.
+                    <div class="flex items-start gap-2.5 p-4 rounded-lg bg-canvas border border-hairline">
+                        <span class="material-symbols-outlined text-[20px] text-ink-48 shrink-0">
+                            "error_outline"
                         </span>
-                        <h1 class="text-xl sm:text-2xl font-bold font-display text-text-bright tracking-tight uppercase">
-                            "AUTHORIZE NODE"
-                        </h1>
-                        <p class="text-xs font-mono text-text-muted leading-relaxed">
-                            "Establish an encrypted connection to your CalDAV calendar server."
-                        </p>
+                        <span class="text-caption text-ink-80">{move || status.get()}</span>
                     </div>
+                </Show>
 
-                    <div class="flex flex-col gap-1.5">
-                        <div class="flex items-center justify-between text-[10px] text-text-muted font-mono uppercase tracking-wider">
-                            <span>"// QUICK-CONNECT PRESETS"</span>
-                        </div>
-                        <div class="grid grid-cols-4 gap-1.5 font-mono text-xs">
+                // `store-utility-card`. No shadow, per DESIGN.md.
+                <div class="bg-canvas border border-hairline rounded-lg p-6 flex flex-col gap-6">
+
+                    <div class="flex flex-col gap-2.5">
+                        <span class="text-caption font-semibold text-ink">"Quick connect"</span>
+                        <div class="flex flex-wrap gap-2">
                             {PRESETS
                                 .iter()
                                 .map(|(name, url)| {
                                     let url = url.to_string();
                                     view! {
+                                        // `configurator-option-chip`.
                                         <button
                                             type="button"
-                                            class="px-2 py-1.5 bg-surface-inner border border-border-tech hover:border-primary hover:text-primary text-text-muted transition-colors text-center text-[11px] font-medium"
+                                            class="px-4 py-2 rounded-full border border-hairline \
+                                                   text-caption text-ink bg-canvas \
+                                                   hover:border-action hover:text-action"
                                             on:click=move |_| server_url.set(url.clone())
                                         >
                                             {*name}
@@ -118,25 +116,27 @@ pub fn ConnectRoutePage() -> impl IntoView {
                     </div>
 
                     <form
-                        class="flex flex-col gap-4"
+                        class="flex flex-col gap-5"
                         on:submit=move |ev: leptos::ev::SubmitEvent| {
                             ev.prevent_default();
-                            do_connect();
+                            connect.dispatch(());
                         }
                     >
-                        <div class="flex flex-col gap-1">
-                            <label class="text-primary font-semibold tracking-wider text-[11px] font-mono" for="server-url">
-                                "01 // SERVER ENDPOINT URL"
+                        <div class="flex flex-col gap-2">
+                            <label class="text-caption font-semibold text-ink" for="server-url">
+                                "Server address"
                             </label>
                             <div class="relative flex items-center">
-                                <div class="absolute left-3 flex items-center pointer-events-none text-primary">
-                                    <span class="material-symbols-outlined text-[16px]">"dns"</span>
-                                </div>
+                                <span class="material-symbols-outlined absolute left-4 text-[18px] text-ink-48 pointer-events-none">
+                                    "dns"
+                                </span>
                                 <input
                                     id="server-url"
                                     class=INPUT_CLASSES
-                                    type="text"
-                                    placeholder="https://notion-caldav.opendiy.vn/..."
+                                    type="url"
+                                    inputmode="url"
+                                    autocomplete="url"
+                                    placeholder="https://example.com/dav/"
                                     prop:value=move || server_url.get()
                                     on:input=move |ev| server_url.set(event_target_value(&ev))
                                     required
@@ -144,18 +144,20 @@ pub fn ConnectRoutePage() -> impl IntoView {
                             </div>
                         </div>
 
-                        <div class="flex flex-col gap-1">
-                            <label class="text-primary font-semibold tracking-wider text-[11px] font-mono" for="uid">
-                                "02 // OPERATOR IDENTITY"
+                        <div class="flex flex-col gap-2">
+                            <label class="text-caption font-semibold text-ink" for="uid">
+                                "Username"
                             </label>
                             <div class="relative flex items-center">
-                                <div class="absolute left-3 flex items-center pointer-events-none text-primary">
-                                    <span class="material-symbols-outlined text-[16px]">"badge"</span>
-                                </div>
+                                <span class="material-symbols-outlined absolute left-4 text-[18px] text-ink-48 pointer-events-none">
+                                    "person"
+                                </span>
                                 <input
                                     id="uid"
                                     class=INPUT_CLASSES
                                     type="text"
+                                    inputmode="email"
+                                    autocomplete="username"
                                     placeholder="you@example.com"
                                     prop:value=move || username.get()
                                     on:input=move |ev| username.set(event_target_value(&ev))
@@ -164,73 +166,55 @@ pub fn ConnectRoutePage() -> impl IntoView {
                             </div>
                         </div>
 
-                        <div class="flex flex-col gap-1">
-                            <label class="text-primary font-semibold tracking-wider text-[11px] font-mono" for="secret-key">
-                                "03 // ACCESS PASSWORD"
+                        <div class="flex flex-col gap-2">
+                            <label class="text-caption font-semibold text-ink" for="secret-key">
+                                "Password"
                             </label>
                             <div class="relative flex items-center">
-                                <div class="absolute left-3 flex items-center pointer-events-none text-primary">
-                                    <span class="material-symbols-outlined text-[16px]">"key"</span>
-                                </div>
+                                <span class="material-symbols-outlined absolute left-4 text-[18px] text-ink-48 pointer-events-none">
+                                    "lock"
+                                </span>
                                 <input
                                     id="secret-key"
-                                    class="w-full bg-surface-inner border border-border-tech text-text-bright font-mono text-xs pl-10 pr-10 py-2.5 focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all placeholder:text-text-muted/40 tracking-widest"
+                                    class=INPUT_CLASSES
                                     type=move || if password_visible.get() { "text" } else { "password" }
-                                    placeholder="••••••••••••••••"
+                                    autocomplete="current-password"
+                                    placeholder="App password"
                                     prop:value=move || password.get()
                                     on:input=move |ev| password.set(event_target_value(&ev))
                                     required
                                 />
                                 <button
                                     type="button"
-                                    class="absolute right-3 text-text-muted hover:text-primary transition-colors flex items-center"
+                                    // 44px: the platform's minimum touch target.
+                                    class="absolute right-1 w-11 h-11 flex items-center justify-center \
+                                           text-ink-48 rounded-full"
+                                    aria-label="Show or hide password"
                                     on:click=move |_| password_visible.update(|v| *v = !*v)
                                 >
-                                    <span class="material-symbols-outlined text-[16px]">
+                                    <span class="material-symbols-outlined text-[18px]">
                                         {move || if password_visible.get() { "visibility_off" } else { "visibility" }}
                                     </span>
                                 </button>
                             </div>
                         </div>
 
-                        <button
-                            type="submit"
-                            class="relative w-full mt-1 focus:outline-none"
-                            disabled=move || connecting.get()
-                        >
-                            <div class="flex items-center justify-center gap-2 bg-accent-orange hover:bg-accent-orange-hover text-black font-mono font-bold text-sm tracking-widest py-3 px-6 transition-all shadow-[0_0_20px_rgba(255,85,0,0.35)]">
-                                <span class="material-symbols-outlined text-[20px]">
-                                    {move || if connecting.get() { "progress_activity" } else { "bolt" }}
-                                </span>
-                                <span>{move || if connecting.get() { "CONNECTING..." } else { "INITIALIZE HANDSHAKE" }}</span>
-                            </div>
-                        </button>
+                        // `button-primary`. Press-scale is global in lib.rs.
+                        <PendingButton
+                            submit=true
+                            pending=connecting
+                            label="Connect"
+                            busy="Connecting…"
+                            class="w-full h-12 rounded-full bg-action text-canvas text-body \
+                                   disabled:opacity-40 flex items-center justify-center gap-2"
+                        />
                     </form>
                 </div>
 
-                <div class="flex items-center justify-between px-1 mt-3 text-text-muted font-mono text-[11px]">
-                    <div class="flex items-center gap-1.5">
-                        <span class="material-symbols-outlined text-[14px] text-primary">"security"</span>
-                        <span>"CREDENTIALS STORED LOCALLY IN THIS BROWSER ONLY"</span>
-                    </div>
-                </div>
+                <p class="text-fine text-ink-48 px-1">
+                    "Your credentials stay in this browser. They are never sent anywhere else."
+                </p>
             </div>
         </main>
-
-        <footer class="relative z-10 w-full border-t border-border-tech bg-[#050508]/85 backdrop-blur-md px-4 lg:px-8 py-2.5 flex flex-col sm:flex-row items-center justify-between gap-2 text-text-muted font-mono text-xs">
-            <div class="flex items-center gap-3">
-                <span>"CALENDAR DISCOVERY PROTOCOL"</span>
-                <span class="text-border-tech">"/"</span>
-                <span class="flex items-center gap-1">
-                    <span class="w-1.5 h-1.5 bg-primary"></span>
-                    <span>"SYNC ENGINE: IDLE"</span>
-                </span>
-            </div>
-            <div class="flex items-center gap-2 text-[11px]">
-                <span class="text-primary">"SECURE PROTOCOL"</span>
-                <span class="text-border-tech">"//"</span>
-                <span>"WEBCALDAV V1.0"</span>
-            </div>
-        </footer>
     }
 }
