@@ -155,20 +155,39 @@ cure.
 Worth doing before S1's affinity fix, since a smaller bundle shortens the
 window S1 is about.
 
-## S4 — the local dev server serves a debug wasm
+## S4 — a debug dev server makes the app feel broken on a phone
 
-Not a bug, but it distorts every performance impression taken from
-`192.168.1.17:8090`. `cargo leptos serve` builds in debug; the wasm it serves
-is 7.8 MB of unoptimised code, and a phone running it is nowhere near what a
-release build does. Anything that feels slow there should be re-checked
-against a release build before being treated as a real problem:
+**Confirmed 2026-11-25.** A laggy-feeling day grid on an iPhone was the debug
+build, nothing else. Rebuilt with `--release` and it was smooth; same commit,
+same device, same network.
 
-```bash
-cargo leptos serve --release
-```
+`cargo leptos serve` builds in debug and serves 7.8 MB of unoptimised wasm.
+`--release` serves 2.0 MB. Measured against each, on the same machine:
 
-Related to S3 — the deployed build is 9.4 MB, which is *release* but
-unoptimised, so the gap between the two is smaller than it should be.
+| | debug | release |
+|---|---|---|
+| wasm | 7.8 MB | 2.0 MB |
+| time to hydrate | 1128 ms | **103 ms** |
+| tap latency (desktop CPU) | 13 ms | 13 ms |
+
+The tap number is the interesting one: **on a desktop CPU there is no
+difference at all**, which is exactly why the problem was invisible from here
+and obvious on the phone. A phone has to parse, compile and run four times
+more unoptimised code, and that is where the 11× hydration gap comes from.
+
+**So: always test speed against `cargo leptos serve --release`.** A debug
+build is fine for behaviour and misleading for anything else.
+
+### What this was *not*
+
+`touch-action: manipulation` was added in the same pass, on the theory that
+Safari was holding clicks back for double-tap-zoom. It was a reasonable
+hypothesis and it is correct practice, so it stays — but it was **not** the
+cause and it is not what fixed this. Recording that, because a line of CSS
+sitting next to a resolved bug reads like the cure a year later.
+
+Related to S3: the deployed image is 9.4 MB — *release*, but built without
+`wasm-opt`, so it is worse than the 2.0 MB a local release build produces.
 
 ## S2 — a corrupt stored config is left behind
 

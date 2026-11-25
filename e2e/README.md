@@ -1,6 +1,6 @@
 # End-to-end tests
 
-236 tests across 13 specs. `npm run e2e`.
+239 tests across 13 specs. `npm run e2e`.
 
 ```bash
 npm run e2e              # everything, both projects
@@ -11,6 +11,12 @@ npx playwright test -g "delete"   # one slice
 
 The dev server starts itself (`webServer` in `playwright.config.ts`) and an
 already-running `cargo leptos serve` is reused.
+
+**For anything about speed, run the server with `--release` first.** A debug
+build serves 7.8 MB of unoptimised wasm against release's 2.0 MB, and hydrates
+in 1128 ms against 103 ms. It makes no measurable difference to tap latency on
+a desktop CPU, which is precisely why a phone can feel broken while every
+measurement taken here looks fine — see S4 in `BACKLOG.md`.
 
 ## How it is built
 
