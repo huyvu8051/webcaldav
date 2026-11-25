@@ -560,7 +560,11 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                     // Errors read as errors through wording and placement. The
                     // old orange panel was a second accent, which DESIGN.md
                     // rules out outright.
+                    // role="alert" carries an implicit assertive live region,
+                    // so inserting this node is what announces it. Without one
+                    // a failed save is silent to a screen reader on every path.
                     <div
+                        role="alert"
                         data-testid="status-error"
                         class="flex items-start gap-2.5 p-4 rounded-lg bg-canvas border border-hairline"
                     >
@@ -580,9 +584,14 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                         // Tapping the title opens the picker, as iOS
                         // Calendar does. The chevrons stay for stepping a
                         // month at a time; the picker is for jumping.
+                        // An h2 so the page can be skimmed by heading. Tailwind's
+                        // preflight zeroes heading margins and inherits the size,
+                        // so this changes nothing visually.
+                        <h2 class="min-w-0">
                         <button
                             type="button"
                             data-testid="month-title"
+                            aria-controls="month-picker"
                             class="flex items-center gap-1 min-w-0 h-11 text-tagline font-semibold text-ink"
                             aria-expanded=move || month_picker_open.get().to_string()
                             on:click=move |_| month_picker_open.update(|v| *v = !*v)
@@ -594,6 +603,7 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                                 {move || if month_picker_open.get() { "expand_less" } else { "expand_more" } }
                             </span>
                         </button>
+                        </h2>
                         <div class="flex items-center shrink-0">
                             <button
                                 data-testid="today-button"
@@ -629,6 +639,9 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                     // Two native <select>s rather than a bespoke wheel: iOS
                     // renders them as the system picker, which is the control
                     // the user already knows, and it costs no custom UI.
+                    // The wrapper is always rendered: aria-controls above must
+                    // point at something that exists even while it is closed.
+                    <div id="month-picker">
                     <Show when=move || month_picker_open.get()>
                         <div class="flex items-center gap-2">
                             <select
@@ -682,6 +695,7 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                             </select>
                         </div>
                     </Show>
+                    </div>
 
                     // `button-primary`: Action Blue, full pill, body text. The
                     // press-scale is global in lib.rs so it cannot be left off.
@@ -727,6 +741,26 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                                             <button
                                                 type="button"
                                                 data-testid="day-cell"
+                                                // Without this the whole
+                                                // accessible name is "25".
+                                                // Today, the event count and
+                                                // the selection are things the
+                                                // design says with a filled
+                                                // disc, a blue number and
+                                                // coloured dots -- none of
+                                                // which is readable aloud.
+                                                aria-label=format!(
+                                                    "{}{}{}",
+                                                    day.format("%A %-d %B %Y"),
+                                                    if is_today { ", today" } else { "" },
+                                                    match day_events.len() {
+                                                        0 => String::new(),
+                                                        1 => ", 1 event".to_string(),
+                                                        n => format!(", {n} events"),
+                                                    },
+                                                )
+                                                aria-current=is_today.then_some("date")
+                                                aria-pressed=move || is_selected().to_string()
                                                 // Addressable by date, so a
                                                 // grid assertion names the day
                                                 // it means instead of counting
@@ -737,7 +771,6 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                                                 data-selected=move || is_selected().to_string()
                                                 data-event-count=day_events.len().to_string()
                                                 class="aspect-square rounded-sm flex flex-col items-center justify-center gap-1"
-                                                class=("opacity-40", move || !in_month)
                                                 on:click=move |_| select_day(day)
                                             >
                                                 // Selection gets the filled
@@ -754,7 +787,15 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                                                     class=("text-canvas", move || is_selected())
                                                     class=("font-semibold", move || is_selected() || is_today)
                                                     class=("text-action", move || is_today && !is_selected())
-                                                    class=("text-ink", move || !is_today && !is_selected())
+                                                    class=("text-ink", move || in_month && !is_today && !is_selected())
+                                                    // Dimmed by colour, not
+                                                    // opacity. `opacity-40` on
+                                                    // #1d1d1f fails AA contrast
+                                                    // at 1.8:1, and these cells
+                                                    // are still tappable, so it
+                                                    // is interactive text that
+                                                    // cannot be read.
+                                                    class=("text-ink-48", move || !in_month && !is_today && !is_selected())
                                                 >
                                                     {day.day()}
                                                 </span>
@@ -762,7 +803,14 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                                                 // there are dots, so the date
                                                 // row does not shift between
                                                 // busy and empty days.
-                                                <span data-testid="day-dots" class="flex items-center gap-0.5 h-1.5">
+                                                // The dots keep the dimming:
+                                                // they carry no text, so no
+                                                // contrast rule applies.
+                                                <span
+                                                    data-testid="day-dots"
+                                                    class="flex items-center gap-0.5 h-1.5"
+                                                    class=("opacity-40", move || !in_month)
+                                                >
                                                     {day_events
                                                         .iter()
                                                         .take(3)
@@ -789,7 +837,13 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                     // The latency readout that used to sit beside it answered
                     // nothing a calendar user can act on.
                     <Show when=move || last_synced.get().is_some() || loading.get()>
-                      <div data-testid="sync-line" class="flex items-center justify-center gap-1">
+                      // Polite, not assertive: "Updated 14:32" should wait for
+                      // a gap rather than interrupt.
+                      <div
+                        data-testid="sync-line"
+                        aria-live="polite"
+                        class="flex items-center justify-center gap-1"
+                      >
                         // Same indicator as the buttons use, so "working" looks
                         // the same wherever it happens.
                         <Show when=move || loading.get()>
@@ -828,7 +882,7 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                     data-testid="calendars-panel"
                     class="bg-canvas border border-hairline rounded-lg p-4 flex flex-col gap-2"
                 >
-                    <span class="text-caption font-semibold text-ink">"Calendars"</span>
+                    <h2 class="text-caption font-semibold text-ink">"Calendars"</h2>
                     <For
                         each=move || calendars.get()
                         key=|c| c.url.clone()
@@ -879,9 +933,9 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                             data-testid="day-detail"
                             class="px-4 py-3 border-b border-divider-soft flex flex-col gap-0.5"
                         >
-                            <span data-testid="day-detail-date" class="text-body font-semibold text-ink">
+                            <h2 data-testid="day-detail-date" class="text-body font-semibold text-ink">
                                 {move || selected_day.get().map(|d| d.format("%A %-d %B").to_string()).unwrap_or_default()}
-                            </span>
+                            </h2>
                             <span data-testid="day-detail-count" class="text-caption text-ink-48">
                                 {move || slot_label(selected_day.get().map(events_on).unwrap_or_default().len())}
                             </span>
@@ -989,6 +1043,7 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                             >
                                 <select
                                     data-testid="form-calendar-url"
+                                    aria-label="Calendar"
                                     class=SELECT
                                     prop:value=move || form.calendar_url.get()
                                     on:change=move |ev| form.calendar_url.set(event_target_value(&ev))
@@ -1061,6 +1116,7 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                                 <div class="grid grid-cols-2 gap-2">
                                     <select
                                         data-testid="form-priority"
+                                        aria-label="Priority"
                                         class=SELECT
                                         prop:value=move || form.priority.get()
                                         on:change=move |ev| form.priority.set(event_target_value(&ev))
@@ -1072,6 +1128,7 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                                     </select>
                                     <select
                                         data-testid="form-busy"
+                                        aria-label="Availability"
                                         class=SELECT
                                         prop:value=move || form.busy.get()
                                         on:change=move |ev| form.busy.set(event_target_value(&ev))
@@ -1084,6 +1141,7 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                                 <div class="flex flex-col gap-2">
                                     <select
                                         data-testid="form-reminder-preset"
+                                        aria-label="Reminder"
                                         class=SELECT
                                         prop:value=move || form.reminder_preset.get()
                                         on:change=move |ev| form.reminder_preset.set(event_target_value(&ev))
@@ -1111,6 +1169,7 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                                             />
                                             <select
                                                 data-testid="form-reminder-unit"
+                                                aria-label="Reminder unit"
                                                 class=SELECT
                                                 prop:value=move || form.reminder_unit.get()
                                                 on:change=move |ev| form.reminder_unit.set(event_target_value(&ev))
@@ -1125,6 +1184,7 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                                 <div class="flex flex-col gap-2">
                                     <select
                                         data-testid="form-travel-preset"
+                                        aria-label="Travel time"
                                         class=SELECT
                                         prop:value=move || form.travel_preset.get()
                                         on:change=move |ev| form.travel_preset.set(event_target_value(&ev))
@@ -1151,6 +1211,7 @@ pub fn CalendarGridRoutePage() -> impl IntoView {
                                             />
                                             <select
                                                 data-testid="form-travel-unit"
+                                                aria-label="Travel time unit"
                                                 class=SELECT
                                                 prop:value=move || form.travel_unit.get()
                                                 on:change=move |ev| form.travel_unit.set(event_target_value(&ev))

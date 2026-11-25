@@ -31,7 +31,10 @@ test.describe('the month grid', () => {
   test('days outside the month are marked and dimmed', async ({ connected: page }) => {
     const out = page.locator('[data-testid="day-cell"][data-in-month="false"]')
     expect(await out.count()).toBeGreaterThan(0)
-    await expect(out.first()).toHaveClass(/opacity-40/)
+    // Dimmed by colour, not opacity: `opacity-40` on #1d1d1f is 1.8:1, and
+    // these cells are still tappable, so that was unreadable interactive text.
+    await expect(out.first().locator('span').first()).toHaveClass(/text-ink-48/)
+    await expect(out.first().getByTestId('day-dots')).toHaveClass(/opacity-40/)
     const inside = await page.locator('[data-testid="day-cell"][data-in-month="true"]').count()
     expect([28, 29, 30, 31]).toContain(inside)
   })

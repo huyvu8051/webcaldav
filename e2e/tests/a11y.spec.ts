@@ -1,5 +1,5 @@
 import AxeBuilder from '@axe-core/playwright'
-import { test, expect, seedSession, waitForIdle, isoDay, dayCell, localDateTime } from '../fixtures/app'
+import { test, expect, seedSession, waitForIdle, waitForHydration, isoDay, dayCell, localDateTime, CREDS } from '../fixtures/app'
 
 /**
  * Accessibility.
@@ -19,8 +19,8 @@ test.use({ realTailwind: true })
 
 const WCAG = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'best-practice']
 
-/** Rules with their own tracked test below; excluded so the sweep stays sharp. */
-const TRACKED = ['color-contrast', 'select-name']
+// Nothing is excluded. `color-contrast` and `select-name` used to be, while
+// A1 and A2 were open; both are fixed, so the sweep is unfiltered again.
 
 async function gotoCalendar(page: import('@playwright/test').Page) {
   await seedSession(page)
@@ -33,7 +33,7 @@ test.describe('axe sweep', () => {
     void mock
     await page.goto('/')
     await expect(page.getByTestId('connect-submit')).toBeVisible()
-    const r = await new AxeBuilder({ page }).withTags(WCAG).disableRules(TRACKED).analyze()
+    const r = await new AxeBuilder({ page }).withTags(WCAG).analyze()
     expect(summarise(r.violations)).toEqual([])
   })
 
@@ -45,7 +45,7 @@ test.describe('axe sweep', () => {
       if (state === 'form open' || state === 'picker open') await page.getByTestId('add-event').click()
       if (state === 'picker open') await page.getByTestId('month-title').click()
 
-      const r = await new AxeBuilder({ page }).withTags(WCAG).disableRules(TRACKED).analyze()
+      const r = await new AxeBuilder({ page }).withTags(WCAG).analyze()
       expect(summarise(r.violations)).toEqual([])
     })
   }
@@ -55,7 +55,7 @@ test.describe('axe sweep', () => {
     await seedSession(page)
     await page.goto('/calendar')
     await expect(page.getByTestId('status-error')).toBeVisible()
-    const r = await new AxeBuilder({ page }).withTags(WCAG).disableRules(TRACKED).analyze()
+    const r = await new AxeBuilder({ page }).withTags(WCAG).analyze()
     expect(summarise(r.violations)).toEqual([])
   })
 })
@@ -219,128 +219,150 @@ test.describe('names and states', () => {
   })
 })
 
-// ---------------------------------------------------------------------------
-// Known gaps. Each is a test.fail asserting what should hold, paired with a
-// passing test pinning what happens now.
-// ---------------------------------------------------------------------------
-
-test.describe('known accessibility gaps', () => {
-  // KNOWN BUG, critical by axe's grading. The five selects in the event form
-  // use their first <option> as a pseudo-label -- "Priority", "Status", "No
-  // reminder", "No travel time", and the calendar list uses the first calendar
-  // name. A screen reader announces the current value and nothing about what
-  // the control is for. The month/year picker selects do have aria-label.
-  test.fail('every select has an accessible name', async ({ mock, page }) => {
+test.describe('what a screen reader is told', () => {
+  test('every select has an accessible name', async ({ mock, page }) => {
+    // They used to lean on their first <option> as a pseudo-label -- "Priority",
+    // "Status", "No reminder" -- which a screen reader never announces as a
+    // label, only as the current value. axe graded that critical.
     void mock
     await gotoCalendar(page)
     await page.getByTestId('add-event').click()
-    const r = await new AxeBuilder({ page }).withTags(WCAG).analyze()
-    expect(summarise(r.violations.filter((v) => v.id === 'select-name'))).toEqual([])
+    await page.getByTestId('form-reminder-preset').selectOption('custom')
+    await page.getByTestId('form-travel-preset').selectOption('custom')
+
+    const unnamed = await page.evaluate(() =>
+      [...document.querySelectorAll<HTMLSelectElement>('select')]
+        .filter((e) => !e.getAttribute('aria-label') && !e.getAttribute('aria-labelledby') && !e.closest('label'))
+        .map((e) => e.getAttribute('data-testid') ?? e.outerHTML.slice(0, 60)),
+    )
+    expect(unnamed).toEqual([])
   })
 
-  test('five selects currently have no accessible name', async ({ mock, page }) => {
+  test('a day cell says which day it is and what is on it', async ({ mock, page }) => {
     void mock
     await gotoCalendar(page)
-    await page.getByTestId('add-event').click()
-    const r = await new AxeBuilder({ page }).withTags(WCAG).analyze()
-    const v = r.violations.find((x) => x.id === 'select-name')
-    expect(v?.nodes.length).toBe(5)
-  })
 
-  // KNOWN BUG. DESIGN.md's muted text token is #7a7a7a, and on the #f5f5f7
-  // page background that is 3.94:1 -- WCAG AA wants 4.5:1 for text this size.
-  // It is used for fine print, the weekday initials, the connected username,
-  // the sync line and the event times, so it is roughly twenty nodes per page
-  // rather than one stray element. Fixing it means moving the token, which is
-  // a design decision, not a patch.
-  test.fail('text meets WCAG AA contrast', async ({ mock, page }) => {
-    void mock
-    await gotoCalendar(page)
-    const r = await new AxeBuilder({ page }).withTags(WCAG).analyze()
-    expect(summarise(r.violations.filter((v) => v.id === 'color-contrast'))).toEqual([])
-  })
-
-  test('the muted text token currently fails contrast at 3.94:1', async ({ mock, page }) => {
-    void mock
-    await gotoCalendar(page)
-    const r = await new AxeBuilder({ page }).withTags(WCAG).analyze()
-    const v = r.violations.find((x) => x.id === 'color-contrast')
-    expect(v, 'expected the known contrast failure').toBeTruthy()
-    expect(v!.nodes.length).toBeGreaterThan(5)
-    expect(JSON.stringify(v!.nodes[0])).toContain('#7a7a7a')
-  })
-
-  // KNOWN BUG. A day cell's entire accessible name is its number: "25,
-  // button". No month, no year, no "today", no count of what is on it, and no
-  // indication that it is the selected one -- the three things the design
-  // communicates purely through a filled disc, a blue number and coloured
-  // dots. This is the app's main interaction and it is the least legible part
-  // of it without sight.
-  test.fail('a day cell says which day it is and what is on it', async ({ mock, page }) => {
-    void mock
-    await gotoCalendar(page)
     const today = dayCell(page, isoDay(0))
+    const label = await today.getAttribute('aria-label')
+    expect(label).toContain('today')
+    // Two events are seeded on today.
+    expect(label).toContain('2 events')
+    expect(label).toMatch(/\d{4}/)
     await expect(today).toHaveAttribute('aria-current', 'date')
 
-    const name = await today.evaluate((e) => e.getAttribute('aria-label') ?? e.textContent?.trim() ?? '')
-    expect(name).toMatch(/\d{1,2}/)
-    expect(name.length, `day cell announces only "${name}"`).toBeGreaterThan(4)
+    // Only today is the current date.
+    await expect(page.locator('[data-testid="day-cell"][aria-current="date"]')).toHaveCount(1)
+
+    const quiet = dayCell(page, isoDay(5))
+    const quietLabel = await quiet.getAttribute('aria-label')
+    expect(quietLabel).not.toContain('event')
+    expect(quietLabel).not.toContain('today')
   })
 
-  test('a day cell currently announces only its number', async ({ mock, page }) => {
+  test('a day cell reports whether it is the selected one', async ({ mock, page }) => {
     void mock
     await gotoCalendar(page)
     const today = dayCell(page, isoDay(0))
-    await expect(today).not.toHaveAttribute('aria-current', /.*/)
-    expect((await today.textContent())?.trim()).toBe(String(new Date().getDate()))
+    await expect(today).toHaveAttribute('aria-pressed', 'false')
+    await today.click()
+    await expect(today).toHaveAttribute('aria-pressed', 'true')
+    await dayCell(page, isoDay(1)).click()
+    await expect(today).toHaveAttribute('aria-pressed', 'false')
   })
 
-  // KNOWN BUG. There is no live region anywhere, so nothing the app does
-  // asynchronously is announced: not "Updating…", not "Updated 14:32", and --
-  // worst -- not the error banner. A save that fails is already silent to a
-  // sighted user on some paths (BACKLOG.md #1); to a screen reader user it is
-  // silent on all of them.
-  test.fail('errors are announced, not just displayed', async ({ mock, page }) => {
+  test('a day with one event says "1 event", not "1 events"', async ({ mock, page }) => {
+    void mock
+    await gotoCalendar(page)
+    await expect(dayCell(page, isoDay(2))).toHaveAttribute('aria-label', /, 1 event$/)
+  })
+
+  test('errors are announced, not just displayed', async ({ mock, page }) => {
     mock.fail({ match: 'REPORT', status: 500 })
     await seedSession(page)
     await page.goto('/calendar')
     await expect(page.getByTestId('status-error')).toBeVisible()
+    // role="alert" carries an implicit assertive live region, so inserting the
+    // node is what announces it.
+    await expect(page.getByTestId('status-error')).toHaveAttribute('role', 'alert')
+  })
 
-    const announced = await page.evaluate(() => {
-      const el = document.querySelector('[data-testid="status-error"]')
-      if (!el) return false
-      return !!el.closest('[aria-live], [role="alert"], [role="status"]')
+  test('a failed connection is announced too', async ({ mock, page }) => {
+    mock.fail({ match: 'PROPFIND /', status: 401 })
+    await page.goto('/')
+    await waitForHydration(page)
+    await page.getByTestId('server-url').fill(CREDS.server)
+    await page.getByTestId('username').fill(CREDS.username)
+    await page.getByTestId('password').fill(CREDS.password)
+    await page.getByTestId('connect-submit').click()
+    await expect(page.getByTestId('connect-error')).toHaveAttribute('role', 'alert')
+  })
+
+  test('the sync line is a polite live region', async ({ mock, page }) => {
+    void mock
+    await gotoCalendar(page)
+    // Polite, not assertive: "Updated 14:32" should wait for a gap rather
+    // than interrupt whatever is being read.
+    await expect(page.getByTestId('sync-line')).toHaveAttribute('aria-live', 'polite')
+  })
+
+  test('the page has headings to navigate by, in order', async ({ mock, page }) => {
+    void mock
+    await gotoCalendar(page)
+    await dayCell(page, isoDay(0)).click()
+
+    const levels = await page.evaluate(() =>
+      [...document.querySelectorAll('h1,h2,h3,h4,h5,h6')].map((e) => ({
+        level: Number(e.tagName[1]),
+        text: (e.textContent ?? '').trim().slice(0, 30),
+      })),
+    )
+    expect(levels.length).toBeGreaterThan(3)
+    expect(levels[0].level).toBe(1)
+    // No skipped levels -- h1 to h3 with nothing in between is a real failure
+    // for anyone navigating by heading.
+    for (let i = 1; i < levels.length; i++) {
+      expect(levels[i].level - levels[i - 1].level, `jump at "${levels[i].text}"`).toBeLessThanOrEqual(1)
+    }
+    expect(levels.map((l) => l.text)).toContain('Calendars')
+  })
+
+  test('wrapping the month title in a heading did not move it', async ({ mock, page }) => {
+    void mock
+    await gotoCalendar(page)
+    // Tailwind's preflight zeroes heading margins and inherits the size, so the
+    // h2 is semantics only. Worth asserting, because a reset that stopped doing
+    // that would push the whole header down.
+    const h2 = page.locator('h2').filter({ has: page.getByTestId('month-title') })
+    const box = await h2.boundingBox()
+    const bar = await page.getByTestId('topbar').boundingBox()
+    expect(box!.y).toBeLessThan(bar!.y + bar!.height + 40)
+    expect(box!.height).toBeLessThanOrEqual(48)
+  })
+
+  test('the month disclosure points at the thing it opens', async ({ mock, page }) => {
+    void mock
+    await gotoCalendar(page)
+    const id = await page.getByTestId('month-title').getAttribute('aria-controls')
+    expect(id).toBeTruthy()
+    // The target must exist even while closed, or the idref dangles.
+    await expect(page.locator(`#${id}`)).toHaveCount(1)
+    await page.getByTestId('month-title').click()
+    await expect(page.locator(`#${id}`).getByTestId('month-select')).toBeVisible()
+  })
+
+  test('muted text meets WCAG AA on every surface it sits on', async ({ mock, page }) => {
+    void mock
+    await gotoCalendar(page)
+    // #7a7a7a from DESIGN.md was 3.94:1 on the parchment background. DESIGN.md
+    // scopes that token to disabled text and fine print, where contrast is
+    // exempt; this app uses it for weekday initials, event times and the sync
+    // line, which are information. Asserted on the computed value so a token
+    // edit cannot quietly put it back.
+    const muted = await page.evaluate(() => {
+      const el = document.querySelector('[data-testid="footer-timezone"]') ?? document.querySelector('.text-fine')
+      return el ? getComputedStyle(el).color : null
     })
-    expect(announced, 'the error banner is in no live region').toBe(true)
-  })
-
-  test('the page currently has no live regions at all', async ({ mock, page }) => {
-    mock.fail({ match: 'REPORT', status: 500 })
-    await seedSession(page)
-    await page.goto('/calendar')
-    await expect(page.getByTestId('status-error')).toBeVisible()
-    const count = await page.locator('[aria-live], [role="alert"], [role="status"]').count()
-    expect(count).toBe(0)
-  })
-
-  // KNOWN BUG, minor. The calendar page has exactly one heading: the "Calendar"
-  // h1 in the top bar. The month name used to be an h2 and became a button
-  // when the picker was added; "Calendars" and the selected date are spans.
-  // There is nothing to navigate by heading, which is how screen reader users
-  // skim a page.
-  test.fail('the page has headings to navigate by', async ({ mock, page }) => {
-    void mock
-    await gotoCalendar(page)
-    await dayCell(page, isoDay(0)).click()
-    const headings = await page.locator('h1, h2, h3, h4, h5, h6').count()
-    expect(headings).toBeGreaterThan(1)
-  })
-
-  test('the calendar page currently has exactly one heading', async ({ mock, page }) => {
-    void mock
-    await gotoCalendar(page)
-    await dayCell(page, isoDay(0)).click()
-    await expect(page.locator('h1, h2, h3, h4, h5, h6')).toHaveCount(1)
+    expect(muted).toBe('rgb(110, 110, 115)')
   })
 })
 

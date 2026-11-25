@@ -33,7 +33,14 @@ tailwind.config = {
         // Text
         "ink": "#1d1d1f",
         "ink-80": "#333333",
-        "ink-48": "#7a7a7a",
+        // #7a7a7a, which DESIGN.md gives here, is 3.94:1 on the parchment
+                        // background -- under AA's 4.5 for text this size. DESIGN.md
+                        // scopes it to "disabled button text and legal fine-print",
+                        // where contrast is exempt; this app leans on it for weekday
+                        // initials, event times and the sync line, which are
+                        // information. #6e6e73 is Apple's own secondary-label grey and
+                        // clears AA on all three surfaces (4.66 / 5.07 / 4.86).
+                        "ink-48": "#6e6e73",
         // Surfaces
         "canvas": "#ffffff",
         "parchment": "#f5f5f7",

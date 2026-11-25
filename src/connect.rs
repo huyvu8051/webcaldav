@@ -81,6 +81,7 @@ pub fn ConnectRoutePage() -> impl IntoView {
                     // One accent only, so an error reads through wording and
                     // placement rather than colour.
                     <div
+                        role="alert"
                         data-testid="connect-error"
                         class="flex items-start gap-2.5 p-4 rounded-lg bg-canvas border border-hairline"
                     >

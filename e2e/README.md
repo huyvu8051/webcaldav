@@ -1,6 +1,6 @@
 # End-to-end tests
 
-208 tests across 11 specs. `npm run e2e`.
+210 tests across 11 specs. `npm run e2e`.
 
 ```bash
 npm run e2e              # everything, both projects
@@ -50,11 +50,14 @@ which is not a second accent in the design.
 ## Accessibility
 
 `a11y.spec.ts` is an axe-core sweep (WCAG 2.1 A/AA plus best-practice) over
-five page states, plus handwritten tests for what a scanner cannot see. The
-sweep is clean apart from two rules, and six gaps are tracked in `BACKLOG.md`
-as A1-A6 -- the loudest being five selects with no accessible name, muted text
-at 3.94:1 against a 4.5:1 requirement, and day cells that announce nothing but
-a number.
+five page states plus the error banner, and handwritten tests for what a
+scanner cannot see. The sweep runs **unfiltered** and is clean.
+
+Seven gaps were found and all seven are fixed -- see `BACKLOG.md` A1-A7. The
+seventh is the instructive one: out-of-month day numbers were `opacity-40` on
+`#1d1d1f`, 1.8:1 interactive text, and it only became visible once the
+contrast fix let `color-contrast` back into the sweep. An excluded rule hides
+more than the thing it was excluded for.
 
 It runs on both projects deliberately: **WebKit will not move focus with Tab**
 unless Full Keyboard Access is on, so a keyboard-order assertion there would
