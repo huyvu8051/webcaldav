@@ -218,7 +218,16 @@ it, which is more code but does not depend on the server.
 Worth checking the calendars `<For>` at `:834` (`key=|c| c.url.clone()`) at the
 same time — a renamed or recoloured calendar has the same shape of problem.
 
-**Test**: `an edited event shows its new title`.
+**Scope, narrowed by `dates.spec.ts`**: only edits that leave the event on
+the same day are invisible. Moving one to another day or month does show,
+because the day list is rebuilt from a different source when the selection
+changes — so the key set really does change. That makes this easy to miss in
+manual testing: rename an event in place and it looks broken, move it and it
+looks fine.
+
+**Test**: `an edited event shows its new title`, with
+`an event moved to another month leaves the old day and arrives on the new`
+pinning the case that already works.
 
 ---
 

@@ -1,6 +1,6 @@
 # End-to-end tests
 
-223 tests across 12 specs. `npm run e2e`.
+236 tests across 13 specs. `npm run e2e`.
 
 ```bash
 npm run e2e              # everything, both projects
@@ -69,6 +69,32 @@ set `:focus-visible`, so reading the computed style after one reports "no
 outline" for every element on the page. The first version of the focus-ring
 test flagged 62 false positives that way. It now presses Tab and reads the
 style at each stop.
+
+## Dates
+
+`dates.spec.ts` exists because the rest of the suite ran create/edit/delete
+almost entirely on today: 57 uses of `isoDay(0)` against a handful of
+one-to-five-day offsets, and nothing at a month boundary. Every date assertion
+in it would still have passed if the app put events on the wrong day in some
+other month.
+
+It runs a full lifecycle — create, verify, reload, verify again, delete — on
+the 1st, the last day of the month, the 31st, 28 and 29 February, new year's
+eve and new year's day, and on days belonging to the neighbouring month that
+the grid still shows. Plus a seeded random pass over a thirteen-month window.
+
+The strong assertion is `expectOnlyOn`: the event is on the day it was asked
+for **and every other cell in the grid reads zero**. A one-day drift passes a
+"did it appear" check and fails this one.
+
+The seed is derived from the date rather than `Math.random`, because
+Playwright matches tests by title across processes and a seed that differs
+between collection and the worker makes the test vanish with "not found".
+Replay a failure with `SEED=<n> npm run e2e`; the seed is logged on every run.
+
+Nothing was found: 13/13 pass, and three extra seeds covering 18 more dates
+pass too. The app's date handling is correct — this spec is here to keep it
+that way.
 
 ## Session recovery
 
