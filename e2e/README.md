@@ -39,10 +39,13 @@ parallel load.
 ## Projects
 
 `phone` is WebKit at iPhone size and runs everything — that is the engine and
-the viewport this app is built for. `desktop` runs only `responsive` and
-`design-system`, because the only thing specifically about desktop is that the
-same column sits centred in more background. Running the behavioural suite
-twice mostly bought engine-specific noise.
+the viewport this app is built for. `desktop` runs `responsive`,
+`design-system` and `a11y` only: the first two because the one thing
+specifically about desktop is that the same column sits centred in more
+background, and the third because keyboard order cannot be measured on WebKit
+(see below). Running the behavioural suite twice mostly bought
+engine-specific noise — Chrome renders `accent-color` as #1269c0, for one,
+which is not a second accent in the design.
 
 ## Accessibility
 
