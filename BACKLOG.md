@@ -115,22 +115,42 @@ browser compiling and instantiating the module, and no amount of CDN tuning
 removes it.
 
 Compression is already fine: Cloudflare serves it `zstd`, 9.38 MB → 1.02 MB.
-The problem is the 9.4 MB input.
+The problem is the 9.4 MB input — and the cause is now known.
+
+**The Dockerfile never runs `wasm-opt`.** It hand-rolls the wasm step --
+`cargo build --release --target wasm32-unknown-unknown` then `wasm-bindgen`
+(lines 24 and 34) -- which bypasses `cargo-leptos`, and `cargo-leptos` is what
+normally runs `wasm-opt` on a release build. Measured on the same commit:
+
+| build | wasm |
+|---|---|
+| `cargo leptos serve` (debug) | 7.8 MB |
+| `cargo leptos serve --release` | **2.0 MB** |
+| the deployed image | **9.4 MB** |
+
+So production ships a bundle **4.7× larger than the same code built locally in
+release**, and the whole gap is one missing optimiser pass. Hydration measured
+against the local release build is **103 ms**, against the local debug build
+**1128 ms**.
 
 **Fixed for now** by covering the window honestly — the server-rendered page
 shows "Updating…", a spinner and a name skeleton, so the wait is visible
 instead of looking like a finished empty calendar. That is a dressing, not a
 cure.
 
-**Actually fixing it** means making the bundle smaller:
+**Actually fixing it**, in order of return:
 
-- there is no `[profile.release]` in `Cargo.toml` at all. `opt-level = "z"`,
-  `lto = true`, `codegen-units = 1`, `panic = "abort"` and `strip = true` are
-  the usual first cut
-- run `wasm-opt -Oz` in the `wasm-builder` stage
-- check what is actually pulling weight: `chrono` with full locale data and
-  `serde_json` are the usual suspects in a Leptos wasm build. `twiggy top` or
-  `wasm-opt --print-function-sizes` will say rather than guess
+1. **Run `wasm-opt -Oz` in the `wasm-builder` stage**, after `wasm-bindgen`.
+   On the evidence above this is most of the 9.4 → ~2 MB on its own, and it is
+   a two-line change. (Or stop hand-rolling and let `cargo-leptos` do the
+   build, which is what it is for -- but the readme explains why that was
+   avoided, so the targeted fix is safer.)
+2. Add a `[profile.release]` to `Cargo.toml`; there is none at all today.
+   `opt-level = "z"`, `lto = true`, `codegen-units = 1`, `panic = "abort"`,
+   `strip = true`.
+3. Only then go looking at what is pulling weight -- `chrono` with full locale
+   data and `serde_json` are the usual suspects. `twiggy top` will say rather
+   than guess.
 
 Worth doing before S1's affinity fix, since a smaller bundle shortens the
 window S1 is about.
