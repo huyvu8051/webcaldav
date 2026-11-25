@@ -1,6 +1,6 @@
 # End-to-end tests
 
-210 tests across 11 specs. `npm run e2e`.
+221 tests across 12 specs. `npm run e2e`.
 
 ```bash
 npm run e2e              # everything, both projects
@@ -69,6 +69,21 @@ set `:focus-visible`, so reading the computed style after one reports "no
 outline" for every element on the page. The first version of the focus-ring
 test flagged 62 false positives that way. It now presses Tab and reads the
 style at each stop.
+
+## Session recovery
+
+`session-recovery.spec.ts` covers what the page does when it cannot finish
+loading. The headline finding is S1 in `BACKLOG.md`: when the WASM never runs,
+the server-rendered page stays on screen looking signed in -- no username, an
+inert Disconnect, no calendars, no error -- and the only way out is clearing
+site data by hand. Reproduced three ways, and the production trigger is our
+own rollout: each pod serves exactly one content-hashed bundle and 404s every
+other, while the Service has no session affinity and the deployment runs two
+replicas with maxSurge 1.
+
+The states that already recover correctly are pinned here too -- unreachable
+server, a 401 after the fact, corrupt stored config, storage blocked entirely
+-- because those are the ones a refactor would quietly break.
 
 ## Known bugs, tracked as expected failures
 

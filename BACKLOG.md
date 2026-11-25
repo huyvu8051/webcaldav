@@ -1,7 +1,7 @@
 # Backlog
 
-Fourteen bugs found by the e2e suite on 2026-11-25: eight functional, still
-open, and six accessibility, now fixed. Each open one has
+Sixteen bugs found by the e2e suite on 2026-11-25: ten functional, still
+open, and seven accessibility, now fixed. Each open one has
 a `test.fail` in `e2e/` asserting the behaviour that *should* hold, paired with
 a passing test pinning what currently happens — so a fix flips the pair and a
 regression flips it back.
@@ -27,6 +27,86 @@ lines and removes most of the app's latency. 4, 6, 7, 8 are smaller.
 | 6 | Nameless calendar renders as `{}` | `rsdav`, or band-aid here | small |
 | 7 | Layout breaks without Google Fonts / Tailwind CDN | `lib.rs` + `Dockerfile` | medium |
 | 8 | Angle brackets stripped from a summary | `rsdav` parse path | small |
+| **S1** | **A page that cannot hydrate looks signed in and cannot be left** | `lib.rs` + `deployment.yaml` | **medium, do first** |
+| S2 | A corrupt stored config is left in localStorage | `storage.rs` | one line |
+
+---
+
+## S1 — a page that cannot hydrate looks signed in, and traps you
+
+The symptom, reproduced three ways: you are on `/calendar`, **no username is
+shown, Disconnect does nothing, no calendars load, and no error appears**. The
+page looks like a normal empty calendar. The only way out is clearing site
+data by hand.
+
+`username`, the CalDAV config and the Disconnect handler are all set inside
+the `#[cfg(feature = "hydrate")]` effect in `calendar_grid.rs`. If the WASM
+never runs, the server-rendered markup stays on screen — including a
+Disconnect button that was never wired to anything.
+
+**This is not hypothetical, and the trigger is our own rollout.** Measured:
+
+- each pod bakes in exactly one content-hashed bundle
+  (`COPY --from=wasm-builder /app/pkg /pkg`, `LEPTOS_OUTPUT_NAME` read from
+  `/output-name.txt` at startup), and serves **404** for any other hash —
+  confirmed against the live site: the current hash returns 200, a made-up one
+  returns 404, with no fallback
+- `webcaldav-service` has `sessionAffinity: None` and the ingress has no
+  sticky-session annotation
+- the deployment runs `replicas: 2` with `maxSurge: 1`
+
+So during a rollout the document can come from the new pod while the browser's
+follow-up request for `/pkg/webcaldav-<newhash>.js` round-robins to the old
+pod, which does not have it. That exact 50/50 split across pods was observed
+while deploying `c73c57c`.
+
+Cloudflare is not caching the HTML (`cf-cache-status: DYNAMIC`), so the edge
+is not the problem — the two pods are.
+
+**Fix, two halves:**
+
+1. *Stop the trigger.* Keep a client's document and its bundle on one pod:
+   `sessionAffinity: ClientIP` on the Service, or a sticky-session cookie
+   annotation on the ingress. Either closes the window without touching the
+   app.
+2. *Recover when it happens anyway* — a dead bundle has other causes. Add an
+   inline `<script>` in the shell (plain, not a module, so it runs even when
+   the bundle is gone) that sets a timer and, if hydration has not signalled
+   within a few seconds, reveals a banner: "could not load" plus a button that
+   does `localStorage.clear(); location.href = '/'`. That turns a trap into a
+   message.
+
+Optionally a third: do not render the signed-in top bar server-side at all, so
+a page that never hydrates does not *claim* to be signed in. That stops it
+lying but does not unstick anyone, so it is the least important of the three.
+
+**Tests**: `e2e/tests/session-recovery.spec.ts` — five tests pin the current
+behaviour across a 404'd wasm, a 404'd script and a script that throws, and
+`a page that cannot hydrate says so` is the tracked failure that flips when
+this is fixed.
+
+**Already correct, and now guarded**: an unreachable server, a 401 after the
+fact, a corrupt stored config and storage blocked entirely all behave properly
+— the username shows, the error shows, and Disconnect works.
+
+---
+
+## S2 — a corrupt stored config is left behind
+
+`storage::load()` returns `None` for unparseable JSON and the page correctly
+redirects to connect, but the unparseable value stays in localStorage, so
+every later visit repeats the same round trip.
+
+**Fix** — clear the key when parsing fails:
+
+```rust
+match serde_json::from_str(&raw) {
+    Ok(cfg) => Some(cfg),
+    Err(_) => { let _ = storage.remove_item(STORAGE_KEY); None }
+}
+```
+
+**Test**: `a corrupt stored config is cleared, not left behind`.
 
 ---
 
