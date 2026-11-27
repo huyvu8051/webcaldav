@@ -1,4 +1,12 @@
-FROM lukemathwalker/cargo-chef:latest-rust-1 AS chef
+# `-bookworm`, not the bare `latest-rust-1`, and this is load-bearing. That
+# tag is rolling: it moved to a trixie base (glibc 2.38) while the runtime
+# stage below stayed on bookworm-slim (glibc 2.36). The build keeps
+# succeeding; the binary then dies at startup with
+#   libc.so.6: version `GLIBC_2.38' not found
+# which is exactly how one caldav-rs replica ended up in CrashLoopBackOff on
+# an image whose sibling, built before the tag moved, ran fine. Pin the
+# Debian base so builder and runtime cannot drift; Rust stays rolling.
+FROM lukemathwalker/cargo-chef:latest-rust-1-bookworm AS chef
 WORKDIR /app
 
 FROM chef AS planner
